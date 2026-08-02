@@ -124,13 +124,19 @@ Audio.init();
 // ========== 精灵图加载 ==========
 const SPRITES = {};
 const SPRITE_LIST = [
-  ['player', 'assets/sprites/player_fighter.png'],
-  ['boss', 'assets/sprites/boss_demon.png'],
-  ['blob', 'assets/sprites/enemy_blob.png'],
-  ['spike', 'assets/sprites/enemy_spike.png'],
-  ['skull', 'assets/sprites/enemy_skull.png'],
-  ['cube', 'assets/sprites/enemy_cube.png'],
+  ['player', 'assets/sprites/player_fighter.jpg'],
+  ['boss', 'assets/sprites/boss_demon.jpg'],
+  ['blob', 'assets/sprites/enemy_blob.jpg'],
+  ['spike', 'assets/sprites/enemy_spike.jpg'],
+  ['skull', 'assets/sprites/enemy_skull.jpg'],
+  ['cube', 'assets/sprites/enemy_cube.jpg'],
   ['bg', 'assets/sprites/bg_space.jpg'],
+  ['gem', 'assets/sprites/item_gem.jpg'],
+  ['heart', 'assets/sprites/item_heart.jpg'],
+  ['chest', 'assets/sprites/item_chest.jpg'],
+  ['equip', 'assets/sprites/item_equip.jpg'],
+  ['magnet', 'assets/sprites/item_magnet.jpg'],
+  ['bomb', 'assets/sprites/item_bomb.jpg'],
 ];
 let spritesReady = 0;
 const spritesTotal = SPRITE_LIST.length;
@@ -826,47 +832,86 @@ function drawStartScreen() {
 }
 
 function drawLevelUpScreen() {
-  drawOverlay(0.8);
-  ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#8affd6';
-  ctx.fillText('升 级', W / 2, H * 0.12);
-  ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a6';
-  ctx.fillText('选择一项强化', W / 2, H * 0.12 + 24);
+  drawOverlay(0.82);
+  // 标题（带光晕）
+  ctx.font = 'bold 26px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#8affd6'; ctx.shadowColor = 'rgba(138,255,214,0.6)'; ctx.shadowBlur = 18;
+  ctx.fillText('升 级', W / 2, H * 0.13);
+  ctx.shadowBlur = 0;
+  ctx.font = '11px sans-serif'; ctx.fillStyle = '#8a93a6';
+  ctx.fillText('选 择 一 项 强 化', W / 2, H * 0.13 + 24);
+
   for (let i = 0; i < levelUpChoices.length; i++) {
     const ch = levelUpChoices[i];
     const cr = levelUpCardRects[i];
     const rc = RARITY[ch.rarity].color;
+    const rcDim = hexA(rc, 0.35);
     const cw = cr.w, ch_h = cr.h, cx = cr.x, cy = cr.y;
-    // 卡片背景
-    const bgGrad = ctx.createLinearGradient(cx, cy, cx + cw, cy + ch_h);
-    bgGrad.addColorStop(0, 'rgba(40,48,72,0.92)'); bgGrad.addColorStop(1, 'rgba(18,22,38,0.96)');
+    // 卡片背景（双层渐变 + 稀有度色调）
+    const bgGrad = ctx.createLinearGradient(cx, cy, cx, cy + ch_h);
+    bgGrad.addColorStop(0, blendColor('#2a3450', rc, 0.18));
+    bgGrad.addColorStop(1, 'rgba(12,16,30,0.96)');
     ctx.fillStyle = bgGrad;
-    roundRect(ctx, cx, cy, cw, ch_h, 14); ctx.fill();
-    // 边框
-    ctx.strokeStyle = rc; ctx.lineWidth = 1.5;
-    roundRect(ctx, cx, cy, cw, ch_h, 14); ctx.stroke();
-    // 稀有度标签
-    ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-    ctx.fillStyle = rc;
-    ctx.fillText(RARITY[ch.rarity].name, cx + cw - 10, cy + 8);
-    // 图标
-    ctx.font = '28px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillStyle = rc; ctx.shadowColor = rc; ctx.shadowBlur = 8;
-    ctx.fillText(ch.upgrade.icon, cx + 14, cy + 16);
+    roundRect(ctx, cx, cy, cw, ch_h, 16); ctx.fill();
+    // 顶部稀有度高光带
+    const topGrad = ctx.createLinearGradient(cx, cy, cx + cw, cy);
+    topGrad.addColorStop(0, 'rgba(0,0,0,0)'); topGrad.addColorStop(0.5, hexA(rc, 0.5)); topGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = topGrad;
+    roundRect(ctx, cx, cy, cw, 3, 1.5); ctx.fill();
+    // 外发光边框（稀有度颜色）
+    ctx.shadowColor = rc; ctx.shadowBlur = ch.rarity === 'legend' ? 22 : ch.rarity === 'epic' ? 16 : 10;
+    ctx.strokeStyle = rc; ctx.lineWidth = 2;
+    roundRect(ctx, cx, cy, cw, ch_h, 16); ctx.stroke();
     ctx.shadowBlur = 0;
-    // 名称
-    ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = rc;
-    ctx.fillText(ch.upgrade.name, cx + 52, cy + 14);
-    // 等级
-    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    const lvlText = ch.upgrade.getLvl() > 0 ? 'Lv.' + ch.upgrade.getLvl() + ' → Lv.' + (ch.upgrade.getLvl() + ch.times) : '未拥有 · ×' + ch.times;
-    ctx.fillText(lvlText, cx + 52, cy + 34);
-    // 描述
-    ctx.font = '12px sans-serif'; ctx.fillStyle = '#b8c0d0'; ctx.textAlign = 'left';
-    ctx.fillText(ch.upgrade.desc, cx + 14, cy + ch_h - 28);
+    // 内层细边
+    ctx.strokeStyle = rcDim; ctx.lineWidth = 1;
+    roundRect(ctx, cx + 3, cy + 3, cw - 6, ch_h - 6, 13); ctx.stroke();
+
+    // 图标圆形底座（居中靠上）
+    const iconR = Math.min(cw, ch_h) * 0.18;
+    const iconCX = cx + cw / 2, iconCY = cy + iconR + 18;
+    // 外光晕环
+    ctx.fillStyle = hexA(rc, 0.12);
+    ctx.beginPath(); ctx.arc(iconCX, iconCY, iconR + 6, 0, TAU); ctx.fill();
+    // 圆形底座渐变
+    const iconBg = ctx.createRadialGradient(iconCX - iconR * 0.3, iconCY - iconR * 0.3, 0, iconCX, iconCY, iconR);
+    iconBg.addColorStop(0, blendColor('#3a4870', rc, 0.3)); iconBg.addColorStop(1, 'rgba(10,14,28,0.95)');
+    ctx.fillStyle = iconBg;
+    ctx.beginPath(); ctx.arc(iconCX, iconCY, iconR, 0, TAU); ctx.fill();
+    ctx.strokeStyle = rc; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(iconCX, iconCY, iconR, 0, TAU); ctx.stroke();
+    // 图标字符
+    ctx.font = Math.round(iconR * 1.3) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = rc; ctx.shadowColor = rc; ctx.shadowBlur = 10;
+    ctx.fillText(ch.upgrade.icon, iconCX, iconCY + 1);
+    ctx.shadowBlur = 0;
+
+    // 稀有度标签（右上角小胶囊）
+    const tagW = 32, tagH = 14, tagX = cx + cw - tagW - 8, tagY = cy + 8;
+    ctx.fillStyle = hexA(rc, 0.2);
+    roundRect(ctx, tagX, tagY, tagW, tagH, tagH / 2); ctx.fill();
+    ctx.strokeStyle = rc; ctx.lineWidth = 1;
+    roundRect(ctx, tagX, tagY, tagW, tagH, tagH / 2); ctx.stroke();
+    ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = rc;
+    ctx.fillText(RARITY[ch.rarity].name, tagX + tagW / 2, tagY + tagH / 2 + 0.5);
+
+    // 名称（图标下方居中）
+    ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = rc; ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 3;
+    ctx.fillText(ch.upgrade.name, cx + cw / 2, iconCY + iconR + 16);
+    ctx.shadowBlur = 0;
+    // 等级（名称下方）
+    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(200,210,225,0.7)';
+    const lvlText = ch.upgrade.getLvl() > 0 ? 'Lv.' + ch.upgrade.getLvl() + ' → Lv.' + (ch.upgrade.getLvl() + ch.times) : '新技能 · ×' + ch.times;
+    ctx.fillText(lvlText, cx + cw / 2, iconCY + iconR + 32);
+    // 描述（底部居中换行）
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#b8c0d0';
+    const descY = cy + ch_h - 30;
+    ctx.fillText(ch.upgrade.desc, cx + cw / 2, descY);
     if (ch.times > 1) {
       ctx.fillStyle = rc;
-      ctx.fillText('稀有度加成：效果 ×' + ch.times, cx + 14, cy + ch_h - 14);
+      ctx.fillText('稀有度加成 ×' + ch.times, cx + cw / 2, descY + 14);
     }
   }
 }
@@ -1229,11 +1274,11 @@ function showLevelUp() {
   // 横屏：3张卡片横排；竖屏：纵排
   const n = choices.length;
   const gap = 12;
-  const cardW = IS_LANDSCAPE ? Math.min(W * 0.28, 260) : W * 0.82;
-  const cardH = IS_LANDSCAPE ? Math.min(H * 0.56, 260) : H * 0.20;
+  const cardW = IS_LANDSCAPE ? Math.min(W * 0.26, 230) : W * 0.82;
+  const cardH = IS_LANDSCAPE ? Math.min(H * 0.68, 300) : H * 0.22;
   const totalW = n * cardW + (n - 1) * gap;
   const startX = (W - totalW) / 2;
-  const startY = IS_LANDSCAPE ? H * 0.24 : H * 0.20;
+  const startY = IS_LANDSCAPE ? H * 0.20 : H * 0.20;
   for (let i = 0; i < choices.length; i++) {
     const u = choices[i];
     const rarity = pickRarity(); const rm = RARITY[rarity].mult; const times = rm >= 3.5 ? 3 : rm >= 2.2 ? 2 : 1;
@@ -1977,20 +2022,26 @@ function drawBoomerangs() {
   }
 }
 function drawGem(g) {
-  ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(time * 2);
-  const s = g.value >= 3 ? 7 : 5;
-  const col = g.value >= 3 ? '#ffe27a' : '#7fe8ff';
-  const glow = g.value >= 3 ? '#ffe27a' : '#4dd0ff';
-  ctx.shadowColor = glow; ctx.shadowBlur = shadowEnabled ? 12 : 0;
-  const grad = ctx.createRadialGradient(-s * 0.2, -s * 0.2, 0, 0, 0, s);
-  grad.addColorStop(0, '#fff'); grad.addColorStop(0.4, col); grad.addColorStop(1, blendColor(col, '#000', 0.3));
-  ctx.fillStyle = grad;
-  ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0); ctx.closePath(); ctx.fill();
+  ctx.save(); ctx.translate(g.x, g.y);
+  const isBig = g.value >= 3;
+  const glow = isBig ? '#ffe27a' : '#4dd0ff';
+  // 光晕底
+  ctx.shadowColor = glow; ctx.shadowBlur = shadowEnabled ? 14 : 0;
+  ctx.fillStyle = hexA(glow, 0.15); ctx.beginPath(); ctx.arc(0, 0, 10, 0, TAU); ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.beginPath(); ctx.moveTo(0, -s * 0.8); ctx.lineTo(s * 0.3, -s * 0.2); ctx.lineTo(-s * 0.1, -s * 0.1); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = hexA(col, 0.6); ctx.lineWidth = 0.5;
-  ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0); ctx.closePath(); ctx.stroke();
+  if (SPRITES.gem) {
+    const sz = isBig ? 26 : 20;
+    ctx.rotate(time * 2);
+    ctx.drawImage(SPRITES.gem, -sz / 2, -sz / 2, sz, sz);
+  } else {
+    ctx.rotate(time * 2);
+    const s = isBig ? 7 : 5;
+    const col = isBig ? '#ffe27a' : '#7fe8ff';
+    const grad = ctx.createRadialGradient(-s * 0.2, -s * 0.2, 0, 0, 0, s);
+    grad.addColorStop(0, '#fff'); grad.addColorStop(0.4, col); grad.addColorStop(1, blendColor(col, '#000', 0.3));
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0); ctx.closePath(); ctx.fill();
+  }
   ctx.restore();
 }
 function drawPickup(p) {
@@ -1998,13 +2049,22 @@ function drawPickup(p) {
   const pulse = 1 + Math.sin(p.pulse * 4) * 0.15; ctx.globalAlpha = blink ? 0.4 : 1;
   const bob = Math.sin(p.pulse * 3) * 3;
   ctx.translate(p.x, p.y + bob);
+  // 光束
   const beamGrad = ctx.createLinearGradient(0, -50, 0, 0);
   beamGrad.addColorStop(0, hexA(p.color, 0)); beamGrad.addColorStop(1, hexA(p.color, 0.2));
   ctx.fillStyle = beamGrad; ctx.beginPath();
   ctx.moveTo(-3, 0); ctx.lineTo(3, 0); ctx.lineTo(7, -50); ctx.lineTo(-7, -50); ctx.closePath(); ctx.fill();
+  // 光晕底
   ctx.shadowColor = p.color; ctx.shadowBlur = shadowEnabled ? 22 : 0;
   ctx.fillStyle = hexA(p.color, 0.2); ctx.beginPath(); ctx.arc(0, 0, p.r * pulse * 1.5, 0, TAU); ctx.fill();
-  if (p.kind === 'chest') {
+  ctx.shadowBlur = 0;
+  // 道具精灵图
+  const spriteMap = { chest: 'chest', bomb: 'bomb', heal: 'heart', magnet: 'magnet' };
+  const spKey = spriteMap[p.kind];
+  if (spKey && SPRITES[spKey]) {
+    const sz = p.r * 2.6 * pulse;
+    ctx.drawImage(SPRITES[spKey], -sz / 2, -sz / 2, sz, sz);
+  } else if (p.kind === 'chest') {
     const s = p.r * pulse;
     ctx.fillStyle = '#8a5a2a'; ctx.beginPath();
     ctx.moveTo(-s, s * 0.7); ctx.lineTo(s, s * 0.7); ctx.lineTo(s * 0.8, -s * 0.2); ctx.lineTo(-s * 0.8, -s * 0.2); ctx.closePath(); ctx.fill();
@@ -2049,30 +2109,42 @@ function drawEqDrop(eq) {
   const pulse = 1 + Math.sin(eq.pulse * 3) * 0.12;
   ctx.translate(eq.x, eq.y);
   const rc = RARITY[eq.rarity].color;
+  // 光束
   const beamH = 60 + Math.sin(eq.pulse * 2) * 10;
   const beamGrad = ctx.createLinearGradient(0, -beamH, 0, 0);
   beamGrad.addColorStop(0, hexA(rc, 0)); beamGrad.addColorStop(1, hexA(rc, 0.25));
   ctx.fillStyle = beamGrad;
   ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(3, 0); ctx.lineTo(8, -beamH); ctx.lineTo(-8, -beamH); ctx.closePath(); ctx.fill();
+  // 稀有度光晕
   ctx.shadowColor = rc; ctx.shadowBlur = shadowEnabled ? 28 : 0;
-  ctx.fillStyle = hexA(rc, 0.15); ctx.beginPath(); ctx.arc(0, 0, 24 * pulse, 0, TAU); ctx.fill();
-  const s = 16 * pulse;
-  const bgGrad = ctx.createRadialGradient(-s * 0.3, -s * 0.3, 0, 0, 0, s * 1.5);
-  bgGrad.addColorStop(0, 'rgba(20,28,50,0.95)'); bgGrad.addColorStop(1, 'rgba(8,12,24,0.95)');
-  ctx.fillStyle = bgGrad; roundRect(ctx, -s, -s, s * 2, s * 2, 6); ctx.fill();
-  ctx.strokeStyle = rc; ctx.lineWidth = 2.5; roundRect(ctx, -s, -s, s * 2, s * 2, 6); ctx.stroke();
-  ctx.strokeStyle = hexA(rc, 0.4); ctx.lineWidth = 1; roundRect(ctx, -s - 3, -s - 3, s * 2 + 6, s * 2 + 6, 8); ctx.stroke();
+  ctx.fillStyle = hexA(rc, 0.18); ctx.beginPath(); ctx.arc(0, 0, 26 * pulse, 0, TAU); ctx.fill();
+  ctx.shadowBlur = 0;
+  const s = 18 * pulse;
+  if (SPRITES.equip) {
+    // 装备精灵图 + 稀有度边框
+    ctx.drawImage(SPRITES.equip, -s, -s, s * 2, s * 2);
+    ctx.strokeStyle = rc; ctx.lineWidth = 2.5;
+    roundRect(ctx, -s, -s, s * 2, s * 2, 6); ctx.stroke();
+    ctx.strokeStyle = hexA(rc, 0.4); ctx.lineWidth = 1;
+    roundRect(ctx, -s - 3, -s - 3, s * 2 + 6, s * 2 + 6, 8); ctx.stroke();
+  } else {
+    const bgGrad = ctx.createRadialGradient(-s * 0.3, -s * 0.3, 0, 0, 0, s * 1.5);
+    bgGrad.addColorStop(0, 'rgba(20,28,50,0.95)'); bgGrad.addColorStop(1, 'rgba(8,12,24,0.95)');
+    ctx.fillStyle = bgGrad; roundRect(ctx, -s, -s, s * 2, s * 2, 6); ctx.fill();
+    ctx.strokeStyle = rc; ctx.lineWidth = 2.5; roundRect(ctx, -s, -s, s * 2, s * 2, 6); ctx.stroke();
+    ctx.strokeStyle = hexA(rc, 0.4); ctx.lineWidth = 1; roundRect(ctx, -s - 3, -s - 3, s * 2 + 6, s * 2 + 6, 8); ctx.stroke();
+    ctx.fillStyle = rc;
+    ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(EQ_SLOT_ICON[eq.slot], 0, 1);
+  }
+  // 史诗/传说旋转粒子
   if (eq.rarity === 'legend' || eq.rarity === 'epic') {
-    ctx.shadowBlur = 0; ctx.rotate(eq.pulse * 1.5);
+    ctx.rotate(eq.pulse * 1.5);
     ctx.fillStyle = rc; ctx.globalAlpha = (blink ? 0.55 : 1) * 0.6;
     for (let i = 0; i < 4; i++) { const a = (i / 4) * TAU; const px = Math.cos(a) * (s + 6), py = Math.sin(a) * (s + 6);
       ctx.beginPath(); ctx.arc(px, py, 1.5, 0, TAU); ctx.fill(); }
-    ctx.globalAlpha = blink ? 0.55 : 1; ctx.rotate(-eq.pulse * 1.5);
+    ctx.globalAlpha = blink ? 0.55 : 1;
   }
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = rc;
-  ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(EQ_SLOT_ICON[eq.slot], 0, 1);
   if (Math.sin(eq.pulse * 4) > 0.7) { ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.beginPath(); ctx.arc(-s * 0.3, -s * 0.3, s * 0.4, 0, TAU); ctx.fill(); }
   ctx.restore();
