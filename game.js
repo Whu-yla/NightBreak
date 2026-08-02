@@ -26,8 +26,11 @@ const IS_LANDSCAPE = W >= H;
 const BOTTOM_RESERVE = Math.max(110, H * 0.26);
 
 // ========== 大地图（面积约为屏幕 9 倍）==========
-const MAP_W = W * 3;
-const MAP_H = H * 3;
+// 无限地图：使用极大值代替固定边界，玩家可自由探索
+const MAP_W = 100000;
+const MAP_H = 100000;
+const MAP_ORIGIN_X = MAP_W / 2; // 玩家出生点
+const MAP_ORIGIN_Y = MAP_H / 2;
 
 // 获取胶囊按钮位置，避免 UI 重叠
 let _menuBtn = { bottom: 48 };
@@ -105,6 +108,70 @@ const Audio = {
     const f = this.actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2000;
     s.connect(f); f.connect(g); g.connect(this.actx.destination); s.start(t);
   },
+  // ========== BGM 循环背景音乐 ==========
+  bgmEnabled: true,
+  bgmTimer: null,
+  bgmBeat: 0,
+  // A小调旋律：低音线（贝斯）+ 琶音（主旋律）+ 鼓点
+  // 每拍0.4s，8拍一个小节，共4小节=32拍=12.8s循环
+  bgmBass:  [110,110, 165,110,  98,98, 147,98,  110,110, 165,110,  130,130, 196,130,
+             110,110, 165,110,  98,98, 147,98,  110,110, 165,110,  130,130, 196,130],
+  bgmArp:   [220,262,330,440,  196,247,294,392,  220,262,330,440,  262,330,392,523,
+             220,262,330,440,  196,247,294,392,  220,262,330,440,  262,330,392,523],
+  bgmStart() {
+    if (!this.enabled || !this.actx || this.bgmTimer) return;
+    this.bgmBeat = 0;
+    const beatDur = 0.4;
+    this.bgmTimer = setInterval(() => {
+      if (!this.bgmEnabled || !this.actx) return;
+      const t = this.actx.currentTime;
+      const i = this.bgmBeat % 32;
+      // 低音线（三角波，低音量）
+      const bassFreq = this.bgmBass[i];
+      if (bassFreq) {
+        const o = this.actx.createOscillator(), g = this.actx.createGain();
+        o.type = 'triangle'; o.frequency.setValueAtTime(bassFreq, t);
+        g.gain.setValueAtTime(0.06, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + beatDur * 0.9);
+        o.connect(g); g.connect(this.actx.destination);
+        o.start(t); o.stop(t + beatDur * 0.9);
+      }
+      // 琶音（正弦波，高八度）
+      const arpFreq = this.bgmArp[i];
+      if (arpFreq) {
+        const o2 = this.actx.createOscillator(), g2 = this.actx.createGain();
+        o2.type = 'sine'; o2.frequency.setValueAtTime(arpFreq, t);
+        g2.gain.setValueAtTime(0.035, t);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + beatDur * 0.7);
+        o2.connect(g2); g2.connect(this.actx.destination);
+        o2.start(t); o2.stop(t + beatDur * 0.7);
+      }
+      // 鼓点：每4拍一个底鼓
+      if (i % 4 === 0) {
+        const o3 = this.actx.createOscillator(), g3 = this.actx.createGain();
+        o3.type = 'sine'; o3.frequency.setValueAtTime(60, t);
+        o3.frequency.exponentialRampToValueAtTime(30, t + 0.1);
+        g3.gain.setValueAtTime(0.08, t);
+        g3.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        o3.connect(g3); g3.connect(this.actx.destination);
+        o3.start(t); o3.stop(t + 0.15);
+      }
+      // 镲片：每2拍一个高频噪声
+      if (i % 2 === 1) {
+        const buf = this.actx.createBuffer(1, Math.floor(this.actx.sampleRate * 0.05), this.actx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let j = 0; j < d.length; j++) d[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / d.length, 3);
+        const s = this.actx.createBufferSource(); s.buffer = buf;
+        const g4 = this.actx.createGain(); g4.gain.setValueAtTime(0.02, t);
+        g4.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+        const f = this.actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 4000;
+        s.connect(f); f.connect(g4); g4.connect(this.actx.destination); s.start(t);
+      }
+      this.bgmBeat++;
+    }, beatDur * 1000);
+  },
+  bgmStop() { if (this.bgmTimer) { clearInterval(this.bgmTimer); this.bgmTimer = null; } },
+  bgmToggle() { this.bgmEnabled = !this.bgmEnabled; if (!this.bgmEnabled) this.bgmStop(); else this.bgmStart(); return this.bgmEnabled; },
   shoot() { this.tone(900, 0.04, 'square', 0.04, 0.5); },
   hit() { this.tone(180, 0.03, 'sawtooth', 0.05); },
   kill() { this.tone(520, 0.08, 'triangle', 0.07, 0.6); },
@@ -124,19 +191,19 @@ Audio.init();
 // ========== 精灵图加载 ==========
 const SPRITES = {};
 const SPRITE_LIST = [
-  ['player', 'assets/sprites/player_fighter.jpg'],
-  ['boss', 'assets/sprites/boss_demon.jpg'],
-  ['blob', 'assets/sprites/enemy_blob.jpg'],
-  ['spike', 'assets/sprites/enemy_spike.jpg'],
-  ['skull', 'assets/sprites/enemy_skull.jpg'],
-  ['cube', 'assets/sprites/enemy_cube.jpg'],
-  ['bg', 'assets/sprites/bg_space.jpg'],
-  ['gem', 'assets/sprites/item_gem.jpg'],
-  ['heart', 'assets/sprites/item_heart.jpg'],
-  ['chest', 'assets/sprites/item_chest.jpg'],
-  ['equip', 'assets/sprites/item_equip.jpg'],
-  ['magnet', 'assets/sprites/item_magnet.jpg'],
-  ['bomb', 'assets/sprites/item_bomb.jpg'],
+  ['player', 'assets/sprites/player_fighter_1.jpg'],
+  ['boss', 'assets/sprites/boss_demon_1.jpg'],
+  ['blob', 'assets/sprites/enemy_blob_1.jpg'],
+  ['spike', 'assets/sprites/enemy_spike_1.jpg'],
+  ['skull', 'assets/sprites/enemy_skull_1.jpg'],
+  ['cube', 'assets/sprites/enemy_cube_1.jpg'],
+  ['bg', 'assets/sprites/bg_space_1.jpg'],
+  ['gem', 'assets/sprites/item_gem_1.jpg'],
+  ['heart', 'assets/sprites/item_heart_1.jpg'],
+  ['chest', 'assets/sprites/item_chest_1.jpg'],
+  ['equip', 'assets/sprites/item_equip_1.jpg'],
+  ['magnet', 'assets/sprites/item_magnet_1.jpg'],
+  ['bomb', 'assets/sprites/item_bomb_1.jpg'],
 ];
 let spritesReady = 0;
 const spritesTotal = SPRITE_LIST.length;
@@ -620,9 +687,8 @@ function triggerRandomEvent() {
     case 'shield': shieldBuff = 6; player.invuln = 6; activeEvent.max = 6; break;
     case 'trap': {
       for (let i = 0; i < 3; i++) {
-        let tx, ty, tries = 0;
-        do { tx = rand(MAP_W * 0.15, MAP_W * 0.85); ty = rand(MAP_H * 0.15, MAP_H * 0.85); tries++; }
-        while (dist2(tx, ty, player.x, player.y) < 350 * 350 && tries < 30);
+        const a = rand(0, TAU), d = rand(300, 600);
+        const tx = player.x + Math.cos(a) * d, ty = player.y + Math.sin(a) * d;
         traps.push({ x: tx, y: ty, killR: 34, pullR: 135, spin: rand(0, TAU) });
       }
       break;
@@ -769,12 +835,14 @@ function handleTouchStart(x, y, id) {
     for (const [name, btn] of Object.entries(skillBtnsNow)) {
       if (ptInCircle(x, y, btn.cx, btn.cy, btn.r)) { tryCastSkill(name); return; }
     }
-    // 顶部按钮
+    // 顶部按钮（声音开关：同时控制BGM和音效）
     if (ptInCircle(x, y, topBtns.sound.cx, topBtns.sound.cy, topBtns.sound.r)) {
-      Audio.enabled = !Audio.enabled; if (Audio.enabled) Audio.resume(); return;
+      Audio.enabled = !Audio.enabled;
+      if (Audio.enabled) { Audio.resume(); Audio.bgmStart(); } else { Audio.bgmStop(); }
+      return;
     }
     if (ptInCircle(x, y, topBtns.pause.cx, topBtns.pause.cy, topBtns.pause.r)) {
-      state = STATE.PAUSE; return;
+      state = STATE.PAUSE; Audio.bgmStop(); return;
     }
     // 摇杆
     if (isInJoyZone(x, y) && joystick.touchId === null) {
@@ -824,7 +892,7 @@ function handleStartTouch(x, y) {
   const btnStartY = H / 2 - totalBtnH / 2;
   // 开始按钮
   if (ptInRect(x, y, btnRightX, btnStartY, btnW, btnH)) {
-    resetGame(); state = STATE.PLAY; return;
+    resetGame(); state = STATE.PLAY; Audio.bgmStart(); return;
   }
   // 排行榜按钮
   if (ptInRect(x, y, btnRightX, btnStartY + btnH + btnGap, btnW, btnH)) {
@@ -840,7 +908,7 @@ function handleOverTouch(x, y) {
   const btnY = H * 0.82;
   // 再次突围
   if (ptInRect(x, y, (W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH)) {
-    resetGame(); state = STATE.PLAY; return;
+    resetGame(); state = STATE.PLAY; Audio.bgmStart(); return;
   }
   // 分享战绩
   if (ptInRect(x, y, (W - btnW) / 2 + btnW / 2 + 6, btnY, btnW, btnH)) {
@@ -850,9 +918,9 @@ function handleOverTouch(x, y) {
 function handlePauseTouch(x, y) {
   const btnW = W * 0.5, btnH = 46;
   const btnY1 = H * 0.42, btnY2 = H * 0.42 + 60;
-  if (ptInRect(x, y, (W - btnW) / 2, btnY1, btnW, btnH)) { state = STATE.PLAY; return; }
+  if (ptInRect(x, y, (W - btnW) / 2, btnY1, btnW, btnH)) { state = STATE.PLAY; Audio.bgmStart(); return; }
   if (ptInRect(x, y, (W - btnW) / 2, btnY2, btnW, btnH)) {
-    state = STATE.START; showRankFromStart = false; return;
+    state = STATE.START; showRankFromStart = false; Audio.bgmStop(); return;
   }
 }
 
@@ -1198,44 +1266,69 @@ function drawSkillButtons() {
   }
 }
 
-// 小地图：右上角显示玩家、陷阱、Boss、敌人方向（9倍地图导航）
+// 小地图：以玩家为中心的雷达图（适配无限地图，显示周围一定范围内的实体）
 function drawMinimap() {
   const mw = Math.min(W * 0.16, 110);
-  const mh = mw * (MAP_H / MAP_W);
+  const mh = mw; // 正方形雷达
   const mx = W - mw - 8 - SAFE_R;
   const my = HUD_TOP + 8;
-  const sx = mw / MAP_W, sy = mh / MAP_H;
+  // 雷达探测范围（世界单位）
+  const radarRange = 800;
+  const sx = mw / (radarRange * 2), sy = mh / (radarRange * 2);
+  const cx = mx + mw / 2, cy = my + mh / 2; // 雷达中心 = 玩家位置
   // 背景
   ctx.fillStyle = 'rgba(8,12,24,0.82)';
   ctx.strokeStyle = 'rgba(77,208,255,0.35)'; ctx.lineWidth = 1.5;
   roundRect(ctx, mx, my, mw, mh, 6); ctx.fill(); ctx.stroke();
-  // 视野矩形
-  const vx = mx + cam.followX * sx, vy = my + cam.followY * sy;
+  // 雷达扫描线（旋转）
+  ctx.save();
+  ctx.beginPath(); ctx.rect(mx, my, mw, mh); ctx.clip();
+  const scanA = (time * 1.5) % TAU;
+  const sg = ctx.createConicGradient ? null : null;
+  ctx.strokeStyle = 'rgba(77,208,255,0.15)'; ctx.lineWidth = 1;
+  for (let r = mw * 0.25; r < mw; r += mw * 0.25) {
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.5, 0, TAU); ctx.stroke();
+  }
+  ctx.beginPath(); ctx.moveTo(mx, cy); ctx.lineTo(mx + mw, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, my); ctx.lineTo(cx, my + mh); ctx.stroke();
+  // 扫描扇形
+  ctx.fillStyle = 'rgba(77,208,255,0.08)';
+  ctx.beginPath(); ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, mw * 0.5, scanA, scanA + 0.6); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  // 视野矩形（屏幕范围在雷达上的投影）
   const vw = W * sx, vh = H * sy;
-  ctx.strokeStyle = 'rgba(138,255,214,0.4)'; ctx.lineWidth = 1;
-  ctx.strokeRect(vx, vy, vw, vh);
+  ctx.strokeStyle = 'rgba(138,255,214,0.3)'; ctx.lineWidth = 1;
+  ctx.strokeRect(cx - vw / 2, cy - vh / 2, vw, vh);
   // 陷阱（红色点）
   for (const tr of traps) {
-    ctx.fillStyle = 'rgba(255,80,110,0.8)';
-    ctx.beginPath(); ctx.arc(mx + tr.x * sx, my + tr.y * sy, 2, 0, TAU); ctx.fill();
+    const dx = tr.x - player.x, dy = tr.y - player.y;
+    if (Math.abs(dx) > radarRange || Math.abs(dy) > radarRange) continue;
+    ctx.fillStyle = 'rgba(255,80,110,0.85)';
+    ctx.beginPath(); ctx.arc(cx + dx * sx, cy + dy * sy, 2, 0, TAU); ctx.fill();
   }
-  // 敌人（橙色小点，只画视野内的）
-  ctx.fillStyle = 'rgba(255,140,80,0.6)';
+  // 敌人（橙色小点）
+  ctx.fillStyle = 'rgba(255,140,80,0.65)';
   for (const e of enemies) {
-    if (e.x < cam.followX - 100 || e.x > cam.followX + W + 100) continue;
-    if (e.y < cam.followY - 100 || e.y > cam.followY + H + 100) continue;
-    ctx.beginPath(); ctx.arc(mx + e.x * sx, my + e.y * sy, 1, 0, TAU); ctx.fill();
+    const dx = e.x - player.x, dy = e.y - player.y;
+    if (Math.abs(dx) > radarRange || Math.abs(dy) > radarRange) continue;
+    ctx.beginPath(); ctx.arc(cx + dx * sx, cy + dy * sy, 1, 0, TAU); ctx.fill();
   }
-  // Boss（大紫点）
+  // Boss（大紫点+脉冲）
   if (boss) {
-    ctx.fillStyle = '#b066ff'; ctx.shadowColor = '#b066ff'; ctx.shadowBlur = 6;
-    ctx.beginPath(); ctx.arc(mx + boss.x * sx, my + boss.y * sy, 3, 0, TAU); ctx.fill();
+    const dx = boss.x - player.x, dy = boss.y - player.y;
+    const pulse = 0.5 + 0.5 * Math.sin(time * 6);
+    ctx.fillStyle = '#b066ff'; ctx.shadowColor = '#b066ff'; ctx.shadowBlur = 6 + pulse * 4;
+    ctx.beginPath(); ctx.arc(cx + dx * sx, cy + dy * sy, 3, 0, TAU); ctx.fill();
     ctx.shadowBlur = 0;
   }
-  // 玩家（青色亮点）
+  // 玩家（青色亮点，永远在中心）
   ctx.fillStyle = '#4dd0ff'; ctx.shadowColor = '#4dd0ff'; ctx.shadowBlur = 6;
-  ctx.beginPath(); ctx.arc(mx + player.x * sx, my + player.y * sy, 2.5, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, TAU); ctx.fill();
   ctx.shadowBlur = 0;
+  // 方向指示（玩家朝向）
+  ctx.strokeStyle = 'rgba(77,208,255,0.6)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(player.facing) * 7, cy + Math.sin(player.facing) * 7); ctx.stroke();
   // 标签
   ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillStyle = 'rgba(138,255,214,0.5)';
@@ -1672,11 +1765,12 @@ function castUlt() { const u = skills.ult; cam.shake = 20; Audio.ult(); flashScr
 
 // ========== 游戏重置 ==========
 function resetGame() {
-  // 玩家出生在地图中心
-  player.x = MAP_W / 2; player.y = MAP_H / 2;
+  // 玩家出生在地图原点（无限地图中心）
+  player.x = MAP_ORIGIN_X; player.y = MAP_ORIGIN_Y;
   player.hp = 100; player.maxHp = 100; player.speed = 180;
   player.level = 1; player.xp = 0; player.xpNext = 5; player.kills = 0;
   player.invuln = 0; player.pickupRange = 90; player.regen = 0;
+  player.trapDamageCd = 0; // 陷阱伤害独立冷却（不与敌人无敌共享）
   player.damageReduction = 0; player.xpMult = 1; player.facing = -Math.PI / 2;
   skills.bullet = { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12 };
   skills.orbit = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, btnCd: 0, btnCdMax: 5.0 };
@@ -1695,19 +1789,22 @@ function resetGame() {
   enemies = []; bullets = []; particles = []; gems = []; pickups = []; floats = [];
   chains = []; lasers = []; boomerangs = []; frosts = []; eqDrops = []; boss = null;
   time = 0; spawnTimer = 0; pickupTimer = 8; wave = 1; cam.shake = 0; nextBossStageIdx = 0;
-  // 相机初始对准玩家
-  cam.followX = clamp(player.x - W / 2, 0, MAP_W - W);
-  cam.followY = clamp(player.y - H / 2, 0, MAP_H - H);
-  // 初始化陷阱（黑洞）：在地图上随机分布，避开出生点
+  bossCycle = 0; lastBossKillTime = 0; // 重置Boss循环状态
+  // 相机初始对准玩家（无限地图，不限制范围）
+  cam.followX = player.x - W / 2;
+  cam.followY = player.y - H / 2;
+  // 初始化陷阱（黑洞）：在玩家周围随机分布，避开出生点
   traps = [];
   const trapCount = 5;
   for (let i = 0; i < trapCount; i++) {
     let tx, ty, tries = 0;
     do {
-      tx = rand(MAP_W * 0.15, MAP_W * 0.85);
-      ty = rand(MAP_H * 0.15, MAP_H * 0.85);
+      // 在玩家周围 300~800 范围内生成陷阱
+      const a = rand(0, TAU), d = rand(300, 800);
+      tx = player.x + Math.cos(a) * d;
+      ty = player.y + Math.sin(a) * d;
       tries++;
-    } while (dist2(tx, ty, player.x, player.y) < 400 * 400 && tries < 30);
+    } while (dist2(tx, ty, player.x, player.y) < 300 * 300 && tries < 30);
     traps.push({ x: tx, y: ty, killR: 34, pullR: 135, spin: rand(0, TAU) });
   }
   for (let i = 0; i < 3; i++) spawnEnemy();
@@ -1769,13 +1866,23 @@ function spawnEnemyAt(x, y, type, forceElite) {
 }
 
 // ========== Boss ==========
+// ========== 10级Boss系统 ==========
+// 每120s一个Boss，交替精英/终极，逐级递增难度；通关10级后循环并倍增属性
 const BOSS_STAGES = [
-  { time: 120, kind: 'elite', name: '影爪先锋', hp: 600, r: 34, speed: 55, dmg: 22, xp: 30, color: '#ff5a3c', glow: '#ff3a1c', dropRare: true, atkPattern: 'spread' },
-  { time: 300, kind: 'ultimate', name: '暗魇君主', hp: 2200, r: 54, speed: 42, dmg: 34, xp: 80, color: '#b02dff', glow: '#9020ff', dropLegend: true, atkPattern: 'spiral' },
-  { time: 480, kind: 'elite', name: '血翼执事', hp: 1100, r: 38, speed: 60, dmg: 28, xp: 50, color: '#ff2d55', glow: '#ff0044', dropRare: true, atkPattern: 'spread' },
-  { time: 660, kind: 'ultimate', name: '永夜魔主', hp: 3800, r: 60, speed: 48, dmg: 42, xp: 120, color: '#ff2dff', glow: '#ff00cc', dropLegend: true, atkPattern: 'spiral' },
+  { lv: 1,  time: 120,  kind: 'elite',    name: '影爪先锋 Lv.1',   hp: 600,   r: 34, speed: 55, dmg: 22, xp: 30,  color: '#ff5a3c', glow: '#ff3a1c', dropRare: true,  atkPattern: 'spread' },
+  { lv: 2,  time: 240,  kind: 'elite',    name: '血翼执事 Lv.2',   hp: 1200,  r: 36, speed: 58, dmg: 26, xp: 45,  color: '#ff2d55', glow: '#ff0044', dropRare: true,  atkPattern: 'spread' },
+  { lv: 3,  time: 360,  kind: 'ultimate', name: '暗魇君主 Lv.3',   hp: 2400,  r: 52, speed: 42, dmg: 34, xp: 80,  color: '#b02dff', glow: '#9020ff', dropLegend: true, atkPattern: 'spiral' },
+  { lv: 4,  time: 480,  kind: 'elite',    name: '烈焰魔将 Lv.4',   hp: 1800,  r: 38, speed: 60, dmg: 30, xp: 55,  color: '#ff8800', glow: '#ff6600', dropRare: true,  atkPattern: 'spread' },
+  { lv: 5,  time: 600,  kind: 'elite',    name: '冰霜女皇 Lv.5',   hp: 2600,  r: 40, speed: 52, dmg: 33, xp: 70,  color: '#3acfff', glow: '#0099ff', dropRare: true,  atkPattern: 'spread' },
+  { lv: 6,  time: 720,  kind: 'ultimate', name: '雷霆领主 Lv.6',   hp: 4200,  r: 54, speed: 46, dmg: 40, xp: 100, color: '#ffe23a', glow: '#ffcc00', dropLegend: true, atkPattern: 'spiral' },
+  { lv: 7,  time: 840,  kind: 'elite',    name: '虚空吞噬者 Lv.7', hp: 3400,  r: 42, speed: 56, dmg: 36, xp: 80,  color: '#9d3aff', glow: '#7a00ff', dropRare: true,  atkPattern: 'spread' },
+  { lv: 8,  time: 960,  kind: 'elite',    name: '混沌使者 Lv.8',   hp: 4400,  r: 44, speed: 58, dmg: 40, xp: 95,  color: '#00ffaa', glow: '#00cc88', dropRare: true,  atkPattern: 'spread' },
+  { lv: 9,  time: 1080, kind: 'ultimate', name: '永夜魔主 Lv.9',   hp: 6500,  r: 58, speed: 50, dmg: 46, xp: 130, color: '#ff2dff', glow: '#ff00cc', dropLegend: true, atkPattern: 'spiral' },
+  { lv: 10, time: 1200, kind: 'ultimate', name: '终焉之主 Lv.10',  hp: 10000, r: 64, speed: 55, dmg: 55, xp: 200, color: '#ffd86b', glow: '#ffaa00', dropLegend: true, atkPattern: 'spiral', isFinal: true },
 ];
 let nextBossStageIdx = 0;
+let bossCycle = 0; // 通关10级后的循环次数（每轮属性x1.8）
+let lastBossKillTime = 0; // 上次Boss击杀时间（用于循环模式下计算下次触发）
 let bossWarnTimer = 0, bossWarnName = '', bossWarnColor = '#ff5a3c', bossWarnUlt = false;
 function spawnBoss(stage) {
   const hpScale = 1 + time / 120;
@@ -1787,13 +1894,15 @@ function spawnBoss(stage) {
     hitFlash: 0, slow: 0, angle: 0, phase: 0, attackTimer: 1.5,
     title: stage.name, kind: stage.kind, atkPattern: stage.atkPattern,
     dropRare: !!stage.dropRare, dropLegend: !!stage.dropLegend,
+    isFinal: !!stage.isFinal,
   };
   // 全屏Boss预警横幅（3秒）
   bossWarnTimer = 3.0; bossWarnName = stage.name; bossWarnColor = stage.color;
   bossWarnUlt = stage.kind === 'ultimate';
-  cam.shake = stage.kind === 'ultimate' ? 20 : 14;
+  cam.shake = stage.isFinal ? 28 : (stage.kind === 'ultimate' ? 20 : 14);
   Audio.bossWarn();
-  if (stage.kind === 'ultimate') flashScreen = 0.2;
+  if (stage.kind === 'ultimate') flashScreen = stage.isFinal ? 0.4 : 0.2;
+  if (stage.isFinal) { timeScale = 0.3; slowMoTimer = 1.0; }
 }
 function damageBoss(dmg) {
   boss.hp -= dmg * synergies.allDmgMult * (frenzyBuff > 0 ? 1.5 : 1); boss.hitFlash = 0.1;
@@ -1827,6 +1936,7 @@ function killBoss() {
     floatText(player.x, player.y - 30, 'Boss 已击破！', '#ffe27a');
   }
   const killedKind = boss.kind;
+  lastBossKillTime = time; // 记录击杀时间，用于循环模式
   boss = null; Audio.bossKill();
   flashScreen = killedKind === 'ultimate' ? 0.45 : 0.3;
   timeScale = 0.3; slowMoTimer = 0.5;
@@ -1942,9 +2052,11 @@ function update(dt) {
     while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
     player.facing += d * Math.min(1, dt * 10);
   }
-  player.x = clamp(player.x, player.r, MAP_W - player.r);
-  player.y = clamp(player.y, player.r, MAP_H - player.r);
+  // 无限地图：不限制玩家移动范围
+  // player.x = clamp(player.x, player.r, MAP_W - player.r);
+  // player.y = clamp(player.y, player.r, MAP_H - player.r);
   if (player.invuln > 0) player.invuln -= dt;
+  if (player.trapDamageCd > 0) player.trapDamageCd -= dt;
   if (player.regen > 0 && player.hp < player.maxHp) player.hp = Math.min(player.maxHp, player.hp + player.regen * dt);
 
   // 技能CD（所有已解锁小技能 + 终极）
@@ -1956,10 +2068,36 @@ function update(dt) {
   if (skills.laser.empower > 0) skills.laser.empower = Math.max(0, skills.laser.empower - dt);
   if (bossWarnTimer > 0) bossWarnTimer = Math.max(0, bossWarnTimer - dt);
 
-  // Boss 触发
-  if (!boss && nextBossStageIdx < BOSS_STAGES.length) {
-    const stage = BOSS_STAGES[nextBossStageIdx];
-    if (time >= stage.time) { spawnBoss(stage); nextBossStageIdx++; }
+  // Boss 触发：10级Boss逐级出现，通关后循环并倍增属性
+  if (!boss) {
+    if (nextBossStageIdx < BOSS_STAGES.length) {
+      // 正常10级Boss
+      const stage = BOSS_STAGES[nextBossStageIdx];
+      if (time >= stage.time) { spawnBoss(stage); nextBossStageIdx++; }
+    } else if (lastBossKillTime > 0 && time - lastBossKillTime >= 120) {
+      // 通关10级后：每120s循环一个Boss，属性倍增
+      bossCycle++;
+      const cycleStage = { ...BOSS_STAGES[(bossCycle - 1) % BOSS_STAGES.length] };
+      const mult = Math.pow(1.8, bossCycle);
+      cycleStage.hp = Math.round(cycleStage.hp * mult);
+      cycleStage.dmg = Math.round(cycleStage.dmg * mult);
+      cycleStage.name = cycleStage.name.replace(/Lv\.\d+/, 'Lv.' + (10 + bossCycle));
+      cycleStage.time = time;
+      spawnBoss(cycleStage);
+    }
+  }
+
+  // 无限地图：清理远离玩家的实体（陷阱、掉落物），并在周围补充陷阱
+  const CLEAN_DIST = 1400; // 超过此距离的实体被清理
+  traps = traps.filter(tr => dist2(tr.x, tr.y, player.x, player.y) < CLEAN_DIST * CLEAN_DIST);
+  // 保持玩家周围至少有3个陷阱
+  if (traps.length < 3) {
+    const a = rand(0, TAU), d = rand(400, 700);
+    traps.push({ x: player.x + Math.cos(a) * d, y: player.y + Math.sin(a) * d, killR: 34, pullR: 135, spin: rand(0, TAU) });
+  }
+  // 清理远离玩家的敌人
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    if (dist2(enemies[i].x, enemies[i].y, player.x, player.y) > CLEAN_DIST * CLEAN_DIST) enemies.splice(i, 1);
   }
 
   // 敌人生成
@@ -2261,29 +2399,38 @@ function update(dt) {
   for (const tr of traps) {
     const dx = tr.x - player.x, dy = tr.y - player.y;
     const d = Math.hypot(dx, dy) || 1;
-    // 引力区：缓慢吸引玩家
+    // 引力区：强力吸引玩家（越近吸力越大）
     if (d < tr.pullR && d > tr.killR) {
-      const pull = (1 - d / tr.pullR) * 60;
+      const pull = (1 - d / tr.pullR) * 120; // 引力增强到120
       player.x += dx / d * pull * dt; player.y += dy / d * pull * dt;
     }
-    // 致命区：大掉血
-    if (d < tr.killR && player.invuln <= 0) {
-      player.hp -= 25; player.invuln = 0.6; cam.shake = 12; Audio.hurt();
-      spawnParticles(player.x, player.y, '#b066ff', 12, 200);
-      if (player.hp <= 0) { player.hp = 0; gameOver(); return; }
+    // 致命区：持续DPS伤害（独立冷却，不与敌人无敌共享；护盾buff期间免疫）
+    if (d < tr.killR && shieldBuff <= 0) {
+      if (player.trapDamageCd <= 0) {
+        const trapDmg = 20 * (1 - player.damageReduction); // 每次扣20血
+        player.hp -= trapDmg;
+        player.trapDamageCd = 0.3; // 0.3秒扣一次 = 约67 DPS
+        cam.shake = 10; Audio.hurt();
+        spawnParticles(player.x, player.y, '#ff3a6a', 10, 200);
+        floatText(player.x, player.y - player.r - 8, '-' + Math.round(trapDmg), '#ff3a6a');
+        if (player.hp <= 0) { player.hp = 0; gameOver(); return; }
+      }
+      // 即使在冷却中也持续微震+粒子
+      if (Math.random() < 0.3) spawnParticles(player.x, player.y, '#b066ff', 2, 100);
     }
     // 吸引并吞噬敌人
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
       const ed = Math.hypot(tr.x - e.x, tr.y - e.y) || 1;
-      if (ed < tr.pullR) { e.x += (tr.x - e.x) / ed * 40 * dt; e.y += (tr.y - e.y) / ed * 40 * dt; }
+      if (ed < tr.pullR) { e.x += (tr.x - e.x) / ed * 50 * dt; e.y += (tr.y - e.y) / ed * 50 * dt; }
       if (ed < tr.killR) { spawnDeathBurst(e.x, e.y, e.color, e.r); enemies.splice(i, 1); }
     }
   }
 
   // ===== 相机跟随玩家（屏幕中心）=====
-  const targetCX = clamp(player.x - W / 2, 0, MAP_W - W);
-  const targetCY = clamp(player.y - H / 2, 0, MAP_H - H);
+  // 无限地图：相机直接跟随玩家，不限制范围
+  const targetCX = player.x - W / 2;
+  const targetCY = player.y - H / 2;
   cam.followX += (targetCX - cam.followX) * Math.min(1, dt * 8);
   cam.followY += (targetCY - cam.followY) * Math.min(1, dt * 8);
 }
@@ -2425,6 +2572,7 @@ function gainXp(v) {
 }
 function gameOver() {
   state = STATE.OVER;
+  Audio.bgmStop(); // 游戏结束停止BGM
   // 自动提交上榜（取最高分）
   goRankEntry = submitScore();
   goSubmitted = true;
@@ -2432,26 +2580,19 @@ function gameOver() {
 
 // ========== 世界渲染 ==========
 function drawBackground() {
-  // 大地图底色（地图范围铺底）
+  // 无限地图：只绘制视野范围内的背景
+  const vx0 = cam.followX, vy0 = cam.followY;
   ctx.fillStyle = '#04050a';
-  ctx.fillRect(0, 0, MAP_W, MAP_H);
-  // 地图边界发光（区分可活动区域）
-  ctx.strokeStyle = 'rgba(77,208,255,0.25)'; ctx.lineWidth = 4;
-  ctx.strokeRect(0, 0, MAP_W, MAP_H);
-  ctx.strokeStyle = 'rgba(138,255,214,0.12)'; ctx.lineWidth = 1.5;
-  ctx.setLineDash([16, 12]);
-  ctx.strokeRect(8, 8, MAP_W - 16, MAP_H - 16);
-  ctx.setLineDash([]);
-  // 网格纹理（让移动有参照感）
+  ctx.fillRect(vx0 - 50, vy0 - 50, W + 100, H + 100);
+  // 无限网格纹理（跟随相机滚动，无边界）
   ctx.strokeStyle = 'rgba(77,140,200,0.06)'; ctx.lineWidth = 1;
   const grid = 120;
-  const vx0 = cam.followX, vy0 = cam.followY;
   const gx0 = Math.floor(vx0 / grid) * grid, gy0 = Math.floor(vy0 / grid) * grid;
   for (let x = gx0; x < vx0 + W + grid; x += grid) {
-    ctx.beginPath(); ctx.moveTo(x, Math.max(0, vy0 - grid)); ctx.lineTo(x, Math.min(MAP_H, vy0 + H + grid)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, vy0 - grid); ctx.lineTo(x, vy0 + H + grid); ctx.stroke();
   }
   for (let y = gy0; y < vy0 + H + grid; y += grid) {
-    ctx.beginPath(); ctx.moveTo(Math.max(0, vx0 - grid), y); ctx.lineTo(Math.min(MAP_W, vx0 + W + grid), y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(vx0 - grid, y); ctx.lineTo(vx0 + W + grid, y); ctx.stroke();
   }
   // 玩家附近环境光
   const g = ctx.createRadialGradient(player.x, player.y, 40, player.x, player.y, Math.max(W, H) * 0.7);
