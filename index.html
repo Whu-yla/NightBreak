@@ -38,6 +38,16 @@
   .card .lvl { font-size: 11px; color: #4dd0ff; margin-bottom: 8px; }
   .card .desc { font-size: 12px; color: #aab4c6; line-height: 1.5; }
 
+  /* 稀有度边框 */
+  .card.r-common  { border-color: rgba(200,208,220,.35); }
+  .card.r-rare    { border-color: rgba(77,208,255,.55);  box-shadow: 0 0 20px rgba(77,208,255,.12); }
+  .card.r-epic    { border-color: rgba(176,102,255,.6);  box-shadow: 0 0 22px rgba(176,102,255,.16); }
+  .card.r-legend  { border-color: rgba(255,226,122,.7);  box-shadow: 0 0 26px rgba(255,226,122,.2); }
+  .card.r-common  .name { color: #e8ecf3; }
+  .card.r-rare    .name { color: #4dd0ff; }
+  .card.r-epic    .name { color: #c89bff; }
+  .card.r-legend  .name { color: #ffe27a; }
+
   /* 死亡统计 */
   #goStats { display: grid; grid-template-columns: auto auto; gap: 8px 24px; margin: 14px 0 24px; font-size: 15px; }
   #goStats .k { color: #8a93a6; text-align: right; }
@@ -47,13 +57,73 @@
     padding: 12px 30px; font-size: 16px; font-weight: 700; letter-spacing: 2px; cursor: pointer; box-shadow: 0 6px 20px rgba(77,208,255,.35); }
   .btn:active { transform: translateY(2px); }
 
-  /* 摇杆 */
+  /* 摇杆（触屏拖动用，保留作为备选） */
   #joy { position: absolute; z-index: 8; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255,255,255,.18);
     background: rgba(255,255,255,.05); display: none; pointer-events: none; transform: translate(-50%,-50%); }
   #joy i { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; border-radius: 50%; transform: translate(-50%,-50%);
     background: rgba(138,255,214,.4); border: 2px solid rgba(138,255,214,.8); }
 
-  .hint { position: absolute; bottom: 14px; left: 0; right: 0; text-align: center; font-size: 12px; color: rgba(154,166,184,.5); pointer-events: none; z-index: 4; }
+  /* ============ 手游操作界面 ============ */
+  /* 底部控制区容器 */
+  #controls { position: absolute; left: 0; right: 0; bottom: 0; z-index: 10; display: none;
+    padding: 18px 22px 28px; justify-content: space-between; align-items: flex-end; pointer-events: none; }
+  #controls.show { display: flex; }
+
+  /* 左边：圆盘方向控制 */
+  .direction-disk { position: relative; width: 170px; height: 170px; pointer-events: auto;
+    border-radius: 50%; background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.06), rgba(255,255,255,.02));
+    border: 2px solid rgba(138,255,214,.25); box-shadow: inset 0 0 30px rgba(77,208,255,.08); }
+  .direction-disk::before { content: ''; position: absolute; inset: 18px; border-radius: 50%;
+    border: 1px dashed rgba(255,255,255,.12); }
+  .dir-btn { position: absolute; width: 52px; height: 52px; border-radius: 50%;
+    background: linear-gradient(160deg, rgba(40,56,90,.85), rgba(20,28,48,.9));
+    border: 1.5px solid rgba(77,208,255,.4); color: #8affd6; font-size: 22px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.1);
+    transition: transform .08s, background .08s, box-shadow .08s; user-select: none; touch-action: none; }
+  .dir-btn:active, .dir-btn.active { transform: scale(.92);
+    background: linear-gradient(160deg, rgba(77,208,255,.45), rgba(138,255,214,.3));
+    border-color: #8affd6; box-shadow: 0 0 18px rgba(138,255,214,.5); color: #fff; }
+  .dir-up    { top: 4px;  left: 50%; transform: translateX(-50%); }
+  .dir-down  { bottom: 4px; left: 50%; transform: translateX(-50%); }
+  .dir-left  { left: 4px;  top: 50%; transform: translateY(-50%); }
+  .dir-right { right: 4px; top: 50%; transform: translateY(-50%); }
+  .dir-up:active,    .dir-up.active    { transform: translateX(-50%) scale(.92); }
+  .dir-down:active,  .dir-down.active  { transform: translateX(-50%) scale(.92); }
+  .dir-left:active,  .dir-left.active  { transform: translateY(-50%) scale(.92); }
+  .dir-right:active, .dir-right.active { transform: translateY(-50%) scale(.92); }
+  .disk-center { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; border-radius: 50%;
+    transform: translate(-50%,-50%); background: rgba(77,208,255,.1);
+    border: 1px solid rgba(138,255,214,.2); }
+
+  /* 右边：技能按钮组 */
+  .skill-panel { display: flex; flex-direction: column; gap: 12px; align-items: flex-end; pointer-events: auto; }
+  .skill-row { display: flex; gap: 12px; }
+  .skill-btn { position: relative; width: 64px; height: 64px; border-radius: 18px;
+    background: linear-gradient(160deg, rgba(40,56,90,.9), rgba(18,26,46,.95));
+    border: 1.5px solid rgba(77,208,255,.45); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08);
+    overflow: hidden; touch-action: none; transition: transform .08s, box-shadow .12s; }
+  .skill-btn:active { transform: scale(.93); }
+  .skill-btn.ready { box-shadow: 0 0 14px rgba(77,208,255,.35), inset 0 1px 0 rgba(255,255,255,.1); }
+  .skill-btn .icon { font-size: 26px; color: #8affd6; text-shadow: 0 0 8px rgba(138,255,214,.6); z-index: 2; }
+  .skill-btn.s-orbit .icon  { color: #bdffe6; text-shadow: 0 0 8px rgba(138,255,214,.7); }
+  .skill-btn.s-aura  .icon  { color: #d9a8ff; text-shadow: 0 0 8px rgba(176,102,255,.7); }
+  .skill-btn.s-ult   .icon  { color: #ffd86b; text-shadow: 0 0 8px rgba(255,210,80,.7); }
+  /* CD 遮罩 */
+  .skill-btn .cd-mask { position: absolute; inset: 0; background: rgba(5,8,16,.72);
+    display: flex; align-items: center; justify-content: center; z-index: 3; pointer-events: none; }
+  .skill-btn .cd-mask.hidden { display: none; }
+  .skill-btn .cd-text { font-size: 18px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px #000; }
+  /* 冷却扇形进度（可选视觉） */
+  .skill-btn .cd-fill { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+  .skill-btn .key-hint { position: absolute; right: 4px; top: 3px; font-size: 10px; color: rgba(255,255,255,.4);
+    font-weight: 700; z-index: 2; }
+  .skill-btn .sk-name { position: absolute; bottom: 3px; left: 0; right: 0; text-align: center;
+    font-size: 10px; color: rgba(200,208,220,.7); z-index: 2; letter-spacing: .5px; }
+
+  .hint { position: absolute; bottom: 220px; left: 0; right: 0; text-align: center; font-size: 12px; color: rgba(154,166,184,.5); pointer-events: none; z-index: 4; }
 </style>
 </head>
 <body>
@@ -71,8 +141,51 @@
   <div id="lvBadge">Lv.<b id="tLv">1</b><br><span id="tXp" style="color:rgba(154,166,184,.6)">0/5</span></div>
 </div>
 
-<!-- 触屏摇杆 -->
+<!-- 触屏摇杆（备选） -->
 <div id="joy"><i></i></div>
+
+<!-- 手游操作界面：左边圆盘方向键 + 右边技能按钮 -->
+<div id="controls">
+  <!-- 左边圆盘 -->
+  <div class="direction-disk">
+    <div class="disk-center"></div>
+    <div class="dir-btn dir-up"    data-dir="up">▲</div>
+    <div class="dir-btn dir-down"  data-dir="down">▼</div>
+    <div class="dir-btn dir-left"  data-dir="left">◀</div>
+    <div class="dir-btn dir-right" data-dir="right">▶</div>
+  </div>
+  <!-- 右边技能 -->
+  <div class="skill-panel">
+    <div class="skill-row">
+      <div class="skill-btn s-bullet ready" data-skill="bullet" title="暗夜弹">
+        <span class="key-hint">1</span>
+        <div class="icon">✦</div>
+        <span class="sk-name">弹幕</span>
+        <div class="cd-mask hidden"><span class="cd-text">0.0</span></div>
+      </div>
+      <div class="skill-btn s-orbit" data-skill="orbit" title="护体光球">
+        <span class="key-hint">2</span>
+        <div class="icon">◉</div>
+        <span class="sk-name">光球</span>
+        <div class="cd-mask hidden"><span class="cd-text">0.0</span></div>
+      </div>
+    </div>
+    <div class="skill-row">
+      <div class="skill-btn s-aura" data-skill="aura" title="幽冥光环">
+        <span class="key-hint">3</span>
+        <div class="icon">◎</div>
+        <span class="sk-name">光环</span>
+        <div class="cd-mask hidden"><span class="cd-text">0.0</span></div>
+      </div>
+      <div class="skill-btn s-ult ready" data-skill="ult" title="终极爆发">
+        <span class="key-hint">R</span>
+        <div class="icon">✺</div>
+        <span class="sk-name">爆发</span>
+        <div class="cd-mask hidden"><span class="cd-text">0.0</span></div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- 开始界面 -->
 <div class="overlay show" id="startScreen">
@@ -80,11 +193,12 @@
   <p class="sub">N I G H T B R E A K</p>
   <p style="max-width:440px;font-size:13px;line-height:1.7;color:#aab4c6;margin-bottom:22px">
     敌人将从黑夜中不断涌来。<br>
-    你的技能会自动释放，击杀敌人获取经验，升级时选择更强的技能。<br>
+    你的战机将自动释放弹幕，击杀敌人获取经验，升级时选择更强的技能。<br>
     活得越久，敌人越多越强。地图上偶有隐藏机遇，别错过。
   </p>
   <p style="font-size:12px;color:#8a93a6;margin-bottom:24px">
-    电脑：WASD / 方向键移动 &nbsp;·&nbsp; 手机：触屏拖动虚拟摇杆
+    电脑：WASD / 方向键移动 · 技能 1/2/3 / R 爆发<br>
+    手机：左边圆盘控制方向 · 右边技能按钮释放
   </p>
   <button class="btn" id="btnStart">开始突围</button>
 </div>
@@ -99,7 +213,7 @@
 <!-- 死亡界面 -->
 <div class="overlay" id="overScreen">
   <h1 style="color:#ff6b8a;text-shadow:0 0 20px rgba(255,77,109,.5)">突 围 失 败</h1>
-  <p class="sub">你倒在了暗夜之中</p>
+  <p class="sub">你的战机坠毁在暗夜中</p>
   <div id="goStats"></div>
   <button class="btn" id="btnRetry">再次突围</button>
 </div>
@@ -108,7 +222,7 @@
 
 <script>
 "use strict";
-// ============ 暗夜突围 NightBreak - 单文件原型 ============
+// ============ 暗夜突围 NightBreak - 战机版 ============
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -130,46 +244,85 @@ const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx 
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const TAU = Math.PI * 2;
 
+// ============ 稀有度 ============
+const RARITY = {
+  common: { name: '普通', color: '#c8d0dc', weight: 50, mult: 1.0 },
+  rare:   { name: '稀有', color: '#4dd0ff', weight: 30, mult: 1.6 },
+  epic:   { name: '史诗', color: '#b066ff', weight: 15, mult: 2.2 },
+  legend: { name: '传说', color: '#ffe27a', weight: 5,  mult: 3.5 },
+};
+function pickRarity() {
+  const r = Math.random() * 100;
+  let acc = 0;
+  for (const k of ['common','rare','epic','legend']) {
+    acc += RARITY[k].weight;
+    if (r < acc) return k;
+  }
+  return 'common';
+}
+
 // ============ 游戏状态 ============
 const STATE = { START: 0, PLAY: 1, LEVELUP: 2, OVER: 3 };
 let state = STATE.START;
 
-// 世界用屏幕坐标，玩家固定在中心，世界随玩家"滚动" -> 简化为玩家可全屏移动，相机跟随
 const cam = { x: 0, y: 0, shake: 0 };
 
 const player = {
-  x: 0, y: 0, r: 14,
+  x: 0, y: 0, r: 16,
   hp: 100, maxHp: 100,
-  speed: 180,           // 像素/秒
+  speed: 180,
   level: 1, xp: 0, xpNext: 5,
   kills: 0,
-  invuln: 0,            // 受伤无敌时间
+  invuln: 0,
   pickupRange: 90,
-  facing: 0,
-  regen: 0,             // 每秒回血
+  facing: -Math.PI / 2, // 战机机头默认朝上（负y）
+  regen: 0,
 };
 
-// 技能系统：每种技能独立属性
+// ============ 技能系统（含按钮CD） ============
 const skills = {
-  bullet: { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 420, spread: 0.12 },
-  orbit:  { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 70, speed: 2.4, angle: 0, hitCd: {} },
-  aura:   { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0 },
+  bullet: { name: '暗夜弹',   icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12, btnCd: 0, btnCdMax: 0 },
+  orbit:  { name: '护体光球', icon: '◉', lvl: 0, dmg: 8,  count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, burstCd: 0, burstCdMax: 4.5 },
+  aura:   { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6,  radius: 0, dps: 0, tick: 0, novaCd: 0, novaCdMax: 6.0 },
+  ult:    { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 20, cd: 0, dmg: 60, radius: 160 },
 };
 
 // 实体数组
 let enemies = [], bullets = [], particles = [], gems = [], pickups = [], floats = [];
-let time = 0;            // 已存活秒数
+let time = 0;
 let spawnTimer = 0;
 let pickupTimer = 8;
 let wave = 1;
 let lastTime = 0;
 
-// ============ 输入 ============
+// ============ 输入：键盘 + 圆盘 + 技能按钮 ============
 const keys = {};
-window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
-window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  // 技能快捷键
+  if (k === '1') tryCastSkill('bullet');
+  if (k === '2') tryCastSkill('orbit');
+  if (k === '3') tryCastSkill('aura');
+  if (k === 'r') tryCastSkill('ult');
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
-// 触屏摇杆
+// 圆盘方向键状态
+const diskInput = { up: false, down: false, left: false, right: false };
+function bindDirBtn(el, dir) {
+  const down = (ev) => { ev.preventDefault(); diskInput[dir] = true; el.classList.add('active'); };
+  const up   = (ev) => { ev.preventDefault(); diskInput[dir] = false; el.classList.remove('active'); };
+  el.addEventListener('touchstart', down, { passive: false });
+  el.addEventListener('touchend',   up,   { passive: false });
+  el.addEventListener('touchcancel',up,   { passive: false });
+  el.addEventListener('mousedown',  down);
+  el.addEventListener('mouseup',    up);
+  el.addEventListener('mouseleave', up);
+}
+document.querySelectorAll('.dir-btn').forEach(b => bindDirBtn(b, b.dataset.dir));
+
+// 触屏拖动摇杆（保留兼容）
 const joy = document.getElementById('joy');
 const joyInner = joy.querySelector('i');
 let touchId = null, joyCx = 0, joyCy = 0, joyVec = { x: 0, y: 0 };
@@ -177,7 +330,9 @@ const JOY_R = 46;
 
 canvas.addEventListener('touchstart', e => {
   if (state !== STATE.PLAY || touchId !== null) return;
+  // 只在画布左半边触发摇杆，避免与右边技能按钮冲突
   const t = e.changedTouches[0];
+  if (t.clientX > W * 0.55) return;
   touchId = t.identifier;
   joyCx = t.clientX; joyCy = t.clientY;
   joy.style.left = joyCx + 'px'; joy.style.top = joyCy + 'px';
@@ -213,17 +368,124 @@ function endTouch(e) {
 canvas.addEventListener('touchend', endTouch, { passive: false });
 canvas.addEventListener('touchcancel', endTouch, { passive: false });
 
+// ============ 技能按钮点击/触摸 ============
+function tryCastSkill(name) {
+  if (state !== STATE.PLAY) return;
+  const s = skills[name];
+  if (!s) return;
+
+  if (name === 'bullet') {
+    // 按钮触发：立即打出一轮强化弹幕（小爆发），独立 CD 3s
+    if (s.btnCd > 0) return;
+    s.btnCd = 3.0; s.btnCdMax = 3.0;
+    castBulletBurst();
+  } else if (name === 'orbit') {
+    if (s.lvl <= 0) return floatText(player.x, player.y - 28, '未解锁', '#8a93a6');
+    if (s.burstCd > 0) return;
+    s.burstCd = s.burstCdMax;
+    castOrbitBurst();
+  } else if (name === 'aura') {
+    if (s.lvl <= 0) return floatText(player.x, player.y - 28, '未解锁', '#8a93a6');
+    if (s.novaCd > 0) return;
+    s.novaCd = s.novaCdMax;
+    castAuraNova();
+  } else if (name === 'ult') {
+    if (s.cd > 0) return;
+    s.cd = s.cdMax;
+    castUlt();
+  }
+}
+
+function castBulletBurst() {
+  const b = skills.bullet;
+  cam.shake = 5;
+  // 360° 弹幕一圈 + 向前多发
+  const ringN = 12;
+  for (let i = 0; i < ringN; i++) {
+    const a = (i / ringN) * TAU;
+    bullets.push({
+      x: player.x, y: player.y, r: 6,
+      vx: Math.cos(a) * b.speed, vy: Math.sin(a) * b.speed,
+      dmg: b.dmg * 1.4, pierce: 1, hit: new Set(), life: 1.4, color: '#ffe27a',
+    });
+  }
+  spawnParticles(player.x, player.y, '#ffe27a', 16, 180);
+  floatText(player.x, player.y - 28, '弹幕爆发!', '#ffe27a');
+}
+function castOrbitBurst() {
+  const o = skills.orbit;
+  cam.shake = 4;
+  // 所有光球向外炸一圈
+  for (let k = 0; k < o.count; k++) {
+    const a = o.angle + (k / o.count) * TAU;
+    const sx = player.x + Math.cos(a) * o.radius;
+    const sy = player.y + Math.sin(a) * o.radius;
+    for (let i = 0; i < 6; i++) {
+      const aa = (i / 6) * TAU + a * 0.3;
+      bullets.push({
+        x: sx, y: sy, r: 5,
+        vx: Math.cos(aa) * 380, vy: Math.sin(aa) * 380,
+        dmg: o.dmg * 1.6, pierce: 0, hit: new Set(), life: 1.2, color: '#bdffe6',
+      });
+    }
+  }
+  spawnParticles(player.x, player.y, '#8affd6', 20, 200);
+  floatText(player.x, player.y - 28, '光球散射!', '#8affd6');
+}
+function castAuraNova() {
+  const au = skills.aura;
+  cam.shake = 6;
+  // 光环范围内造成一次大伤害
+  const r = au.radius + 40;
+  const r2 = r * r;
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (dist2(e.x, e.y, player.x, player.y) < r2) {
+      damageEnemy(e, au.dps * 4, i);
+    }
+  }
+  // 视觉：扩散圆环
+  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: r, life: 0.45, max: 0.45, color: '#c89bff' });
+  spawnParticles(player.x, player.y, '#b066ff', 24, 220);
+  floatText(player.x, player.y - 28, '幽冥冲击!', '#c89bff');
+}
+function castUlt() {
+  const u = skills.ult;
+  cam.shake = 16;
+  const r2 = u.radius * u.radius;
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (dist2(e.x, e.y, player.x, player.y) < r2) {
+      damageEnemy(e, u.dmg + player.level * 2, i);
+    }
+  }
+  // 多圈扩散
+  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius, life: 0.6, max: 0.6, color: '#ffd86b' });
+  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius * 0.7, life: 0.45, max: 0.45, color: '#ff8fa3' });
+  spawnParticles(player.x, player.y, '#ffe27a', 50, 360);
+  floatText(player.x, player.y - 28, '终焉爆发!!', '#ffd86b');
+}
+
+document.querySelectorAll('.skill-btn').forEach(btn => {
+  const handler = (ev) => { ev.preventDefault(); tryCastSkill(btn.dataset.skill); };
+  btn.addEventListener('touchstart', handler, { passive: false });
+  btn.addEventListener('click', handler);
+});
+
 // ============ 重置游戏 ============
 function resetGame() {
   player.x = W / 2; player.y = H / 2;
   player.hp = 100; player.maxHp = 100; player.speed = 180;
   player.level = 1; player.xp = 0; player.xpNext = 5; player.kills = 0;
   player.invuln = 0; player.pickupRange = 90; player.regen = 0;
-  skills.bullet = { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 420, spread: 0.12 };
-  skills.orbit  = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 70, speed: 2.4, angle: 0, hitCd: {} };
-  skills.aura   = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0 };
+  player.facing = -Math.PI / 2;
+  skills.bullet = { name: '暗夜弹',   icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12, btnCd: 0, btnCdMax: 3.0 };
+  skills.orbit  = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8,  count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, burstCd: 0, burstCdMax: 4.5 };
+  skills.aura   = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6,  radius: 0, dps: 0, tick: 0, novaCd: 0, novaCdMax: 6.0 };
+  skills.ult    = { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 20, cd: 0, dmg: 60, radius: 160 };
   enemies = []; bullets = []; particles = []; gems = []; pickups = []; floats = [];
   time = 0; spawnTimer = 0; pickupTimer = 8; wave = 1; cam.shake = 0;
+  for (const k in upgradeLevels) delete upgradeLevels[k];
 }
 
 // ============ 敌人 ============
@@ -235,7 +497,6 @@ const ENEMY_TYPES = {
 };
 
 function spawnEnemy() {
-  // 从屏幕外四边生成
   const margin = 40;
   const side = randi(0, 3);
   let x, y;
@@ -244,7 +505,6 @@ function spawnEnemy() {
   else if (side === 2) { x = rand(-margin, W + margin); y = H + margin; }
   else { x = -margin; y = rand(-margin, H + margin); }
 
-  // 根据时间决定可出现的敌人种类
   let type = 'grunt';
   const r = Math.random();
   if (time > 30 && r < 0.35) type = 'runner';
@@ -253,7 +513,6 @@ function spawnEnemy() {
   if (time < 30) type = 'grunt';
 
   const t = ENEMY_TYPES[type];
-  // 难度缩放
   const hpScale = 1 + time / 60;
   const dmgScale = 1 + time / 120;
   enemies.push({
@@ -273,7 +532,7 @@ function spawnParticles(x, y, color, n, spd) {
   }
 }
 function floatText(x, y, txt, color) {
-  floats.push({ x, y, txt, color, life: 0.8, max: 0.8 });
+  floats.push({ x, y, txt, color, life: 0.9, max: 0.9 });
 }
 
 // ============ 经验宝石 ============
@@ -281,7 +540,7 @@ function spawnGem(x, y, value) {
   gems.push({ x, y, vx: rand(-30, 30), vy: rand(-30, 30), value, life: 30, pull: false });
 }
 
-// ============ 拾取物（隐藏机遇） ============
+// ============ 拾取物 ============
 const PICKUP_TYPES = [
   { kind: 'heal',  icon: '✚', color: '#5dff9b', name: '医疗包', desc: '恢复 40 点生命' },
   { kind: 'magnet',icon: '⩕', color: '#4dd0ff', name: '磁铁',  desc: '吸取全场经验宝石' },
@@ -292,25 +551,30 @@ function spawnPickup() {
   const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
   pickups.push({
     ...t,
-    x: rand(60, W - 60), y: rand(80, H - 80),
+    x: rand(60, W - 60), y: rand(100, H - 220),
     r: 14, life: 18, pulse: 0,
   });
+}
+function spawnPickupAt(x, y) {
+  const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
+  pickups.push({ ...t, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - 200), r: 14, life: 15, pulse: 0 });
 }
 
 // ============ 升级技能池 ============
 const UPGRADES = [
-  { id: 'bDmg',  icon: '✦', name: '弹丸强化', desc: '暗夜弹伤害 +35%', apply: () => skills.bullet.dmg *= 1.35, maxLvl: 8, getLvl: () => skills.bullet.lvl },
-  { id: 'bRate', icon: '⚡', name: '急速射击', desc: '暗夜弹射速 +20%', apply: () => skills.bullet.cd *= 0.8, maxLvl: 8, getLvl: () => 0 },
-  { id: 'bCount',icon: '✲', name: '多重弹幕', desc: '暗夜弹数量 +1', apply: () => { skills.bullet.count += 1; skills.bullet.lvl++; }, maxLvl: 6, getLvl: () => skills.bullet.count - 1 },
-  { id: 'bPierce',icon:'➳', name: '穿透弹头', desc: '暗夜弹穿透 +1', apply: () => { skills.bullet.pierce += 1; skills.bullet.lvl++; }, maxLvl: 4, getLvl: () => skills.bullet.pierce },
-  { id: 'oNew',  icon: '◉', name: '护体光球', desc: '解锁环绕光球，撞击敌人', apply: () => { skills.orbit.count += 1; skills.orbit.lvl += 1; }, maxLvl: 6, getLvl: () => skills.orbit.count },
-  { id: 'oDmg',  icon: '◎', name: '光球充能', desc: '光球伤害 +40%', apply: () => skills.orbit.dmg *= 1.4, maxLvl: 6, getLvl: () => skills.orbit.lvl },
-  { id: 'aNew',  icon: '⊙', name: '幽冥光环', desc: '解锁周身伤害光环', apply: () => { skills.aura.radius = 70; skills.aura.dps = 12; skills.aura.lvl += 1; }, maxLvl: 5, getLvl: () => skills.aura.lvl },
-  { id: 'aDmg',  icon: '◌', name: '光环扩散', desc: '光环范围与伤害提升', apply: () => { skills.aura.radius += 18; skills.aura.dps *= 1.3; skills.aura.lvl += 1; }, maxLvl: 5, getLvl: () => skills.aura.lvl },
-  { id: 'pSpeed',icon: '⇶', name: '迅捷', desc: '移动速度 +12%', apply: () => player.speed *= 1.12, maxLvl: 6, getLvl: () => 0 },
-  { id: 'pHp',   icon: '♥', name: '强健体魄', desc: '最大生命 +25 并回满', apply: () => { player.maxHp += 25; player.hp = player.maxHp; }, maxLvl: 8, getLvl: () => 0 },
-  { id: 'pRange',icon: '◎', name: '吸取领域', desc: '经验拾取范围 +40%', apply: () => player.pickupRange *= 1.4, maxLvl: 5, getLvl: () => 0 },
-  { id: 'pRegen',icon: '✚', name: '生命再生', desc: '每秒回复 1.5 点生命', apply: () => player.regen += 1.5, maxLvl: 5, getLvl: () => 0 },
+  { id: 'bDmg',    icon: '✦', name: '弹丸强化', desc: '暗夜弹伤害 +35%', apply: () => skills.bullet.dmg *= 1.35, maxLvl: 8, getLvl: () => skills.bullet.lvl },
+  { id: 'bRate',   icon: '⚡', name: '急速射击', desc: '暗夜弹射速 +20%', apply: () => skills.bullet.cd *= 0.8, maxLvl: 8, getLvl: () => 0 },
+  { id: 'bCount',  icon: '✲', name: '多重弹幕', desc: '暗夜弹数量 +1', apply: () => { skills.bullet.count += 1; skills.bullet.lvl++; }, maxLvl: 6, getLvl: () => skills.bullet.count - 1 },
+  { id: 'bPierce', icon: '➳', name: '穿透弹头', desc: '暗夜弹穿透 +1', apply: () => { skills.bullet.pierce += 1; skills.bullet.lvl++; }, maxLvl: 4, getLvl: () => skills.bullet.pierce },
+  { id: 'oNew',    icon: '◉', name: '护体光球', desc: '解锁环绕光球，撞击敌人', apply: () => { skills.orbit.count += 1; skills.orbit.lvl += 1; }, maxLvl: 6, getLvl: () => skills.orbit.count },
+  { id: 'oDmg',    icon: '◎', name: '光球充能', desc: '光球伤害 +40%', apply: () => skills.orbit.dmg *= 1.4, maxLvl: 6, getLvl: () => skills.orbit.lvl },
+  { id: 'aNew',    icon: '⊙', name: '幽冥光环', desc: '解锁周身伤害光环', apply: () => { skills.aura.radius = 70; skills.aura.dps = 12; skills.aura.lvl += 1; }, maxLvl: 5, getLvl: () => skills.aura.lvl },
+  { id: 'aDmg',    icon: '◌', name: '光环扩散', desc: '光环范围与伤害提升', apply: () => { skills.aura.radius += 18; skills.aura.dps *= 1.3; skills.aura.lvl += 1; }, maxLvl: 5, getLvl: () => skills.aura.lvl },
+  { id: 'pSpeed',  icon: '⇶', name: '迅捷',     desc: '战机移动速度 +12%', apply: () => player.speed *= 1.12, maxLvl: 6, getLvl: () => 0 },
+  { id: 'pHp',     icon: '♥', name: '装甲强化', desc: '最大生命 +25 并回满', apply: () => { player.maxHp += 25; player.hp = player.maxHp; }, maxLvl: 8, getLvl: () => 0 },
+  { id: 'pRange',  icon: '◎', name: '吸取领域', desc: '经验拾取范围 +40%', apply: () => player.pickupRange *= 1.4, maxLvl: 5, getLvl: () => 0 },
+  { id: 'pRegen',  icon: '✚', name: '纳米修复', desc: '每秒回复 1.5 点生命', apply: () => player.regen += 1.5, maxLvl: 5, getLvl: () => 0 },
+  { id: 'uUp',     icon: '✺', name: '爆发核心', desc: '终极爆发伤害与范围提升，并缩短 CD', apply: () => { skills.ult.dmg += 25; skills.ult.radius += 25; skills.ult.cdMax = Math.max(10, skills.ult.cdMax - 2); }, maxLvl: 4, getLvl: () => 0 },
 ];
 
 const upgradeLevels = {};
@@ -321,7 +585,6 @@ function availableUpgrades() {
 function showLevelUp() {
   state = STATE.LEVELUP;
   const pool = availableUpgrades();
-  // 随机抽 3 张
   const choices = [];
   const tmp = pool.slice();
   for (let i = 0; i < 3 && tmp.length; i++) {
@@ -332,14 +595,18 @@ function showLevelUp() {
   wrap.innerHTML = '';
   choices.forEach(u => {
     const cur = upgradeLevels[u.id] || 0;
+    const rarity = pickRarity();
+    const rm = RARITY[rarity].mult;
     const el = document.createElement('div');
-    el.className = 'card';
-    el.innerHTML = `<div class="icon" style="color:${u.id.startsWith('a')?'#b066ff':u.id.startsWith('o')?'#8affd6':'#4dd0ff'}">${u.icon}</div>
+    el.className = 'card r-' + rarity;
+    el.innerHTML = `<div class="icon" style="color:${RARITY[rarity].color}">${u.icon}</div>
       <div class="name">${u.name}</div>
-      <div class="lvl">${u.getLvl() > 0 ? '当前 Lv.' + u.getLvl() + ' → Lv.' + (u.getLvl()+1) : '未拥有'}</div>
+      <div class="lvl">稀有度：${RARITY[rarity].name} · ${u.getLvl() > 0 ? '当前 Lv.' + u.getLvl() + ' → Lv.' + (u.getLvl()+1) : '未拥有'}</div>
       <div class="desc">${u.desc}</div>`;
     el.onclick = () => {
-      u.apply();
+      // 应用稀有度倍率：部分强化可多次应用
+      const times = rm >= 3.5 ? 3 : rm >= 2.2 ? 2 : 1;
+      for (let i = 0; i < times; i++) u.apply();
       upgradeLevels[u.id] = (upgradeLevels[u.id] || 0) + 1;
       document.getElementById('levelScreen').classList.remove('show');
       state = STATE.PLAY;
@@ -354,27 +621,43 @@ function showLevelUp() {
 function update(dt) {
   time += dt;
 
-  // 玩家移动
+  // 玩家移动（键盘 + 圆盘 + 摇杆）
   let mx = 0, my = 0;
   if (keys['a'] || keys['arrowleft'])  mx -= 1;
   if (keys['d'] || keys['arrowright']) mx += 1;
   if (keys['w'] || keys['arrowup'])    my -= 1;
   if (keys['s'] || keys['arrowdown'])  my += 1;
+  if (diskInput.left)  mx -= 1;
+  if (diskInput.right) mx += 1;
+  if (diskInput.up)    my -= 1;
+  if (diskInput.down)  my += 1;
   if (touchId !== null) { mx += joyVec.x; my += joyVec.y; }
   const ml = Math.hypot(mx, my);
   if (ml > 0.05) {
     mx /= Math.max(ml, 1); my /= Math.max(ml, 1);
     player.x += mx * player.speed * dt;
     player.y += my * player.speed * dt;
-    player.facing = Math.atan2(my, mx);
+    // 机头朝向移动方向（带渐变过渡，避免抖动）
+    const target = Math.atan2(my, mx);
+    let d = target - player.facing;
+    while (d >  Math.PI) d -= TAU;
+    while (d < -Math.PI) d += TAU;
+    player.facing += d * Math.min(1, dt * 10);
   }
   player.x = clamp(player.x, player.r, W - player.r);
-  player.y = clamp(player.y, player.r, H - player.r);
+  player.y = clamp(player.y, player.r, H - player.r - 180); // 底部留出操作区
 
   if (player.invuln > 0) player.invuln -= dt;
   if (player.regen > 0 && player.hp < player.maxHp) {
     player.hp = Math.min(player.maxHp, player.hp + player.regen * dt);
   }
+
+  // === 技能按钮CD递减 ===
+  if (skills.bullet.btnCd > 0) skills.bullet.btnCd = Math.max(0, skills.bullet.btnCd - dt);
+  if (skills.orbit.burstCd > 0) skills.orbit.burstCd = Math.max(0, skills.orbit.burstCd - dt);
+  if (skills.aura.novaCd > 0)  skills.aura.novaCd  = Math.max(0, skills.aura.novaCd  - dt);
+  if (skills.ult.cd > 0)       skills.ult.cd       = Math.max(0, skills.ult.cd       - dt);
+  updateSkillButtons();
 
   // === 敌人生成 ===
   spawnTimer -= dt;
@@ -394,13 +677,12 @@ function update(dt) {
     pickupTimer = rand(12, 20);
   }
 
-  // === 技能：暗夜弹 ===
+  // === 技能：暗夜弹（自动发射） ===
   const b = skills.bullet;
   if (b.lvl > 0) {
     b.timer -= dt;
     if (b.timer <= 0 && enemies.length > 0) {
       b.timer = b.cd;
-      // 找最近敌人
       let best = null, bd = Infinity;
       for (const e of enemies) {
         const d = dist2(e.x, e.y, player.x, player.y);
@@ -432,7 +714,7 @@ function update(dt) {
         const a = o.angle + (k / o.count) * TAU;
         const ox = player.x + Math.cos(a) * o.radius;
         const oy = player.y + Math.sin(a) * o.radius;
-        if (dist2(ox, oy, e.x, e.y) < (o.radius * 0 + 12 + e.r) ** 2) {
+        if (dist2(ox, oy, e.x, e.y) < (12 + e.r) ** 2) {
           const key = i + '_' + k;
           if (!o.hitCd[key] || o.hitCd[key] <= 0) {
             damageEnemy(e, o.dmg, i);
@@ -441,7 +723,6 @@ function update(dt) {
         }
       }
     }
-    // 冷却递减
     for (const k in o.hitCd) { o.hitCd[k] -= dt; if (o.hitCd[k] <= 0) delete o.hitCd[k]; }
   }
 
@@ -489,8 +770,6 @@ function update(dt) {
     const sp = e.speed * (e.slow > 0 ? 0.5 : 1);
     e.x += Math.cos(ang) * sp * dt;
     e.y += Math.sin(ang) * sp * dt;
-
-    // 与玩家碰撞
     if (player.invuln <= 0 && dist2(e.x, e.y, player.x, player.y) < (e.r + player.r) ** 2) {
       player.hp -= e.dmg;
       player.invuln = 0.6;
@@ -537,12 +816,16 @@ function update(dt) {
   // === 粒子 ===
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
-    p.x += p.vx * dt; p.y += p.vy * dt;
-    p.vx *= 0.92; p.vy *= 0.92;
-    p.life -= dt;
-    if (p.life <= 0) particles.splice(i, 1);
+    if (p.kind === 'ring') {
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    } else {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.92; p.vy *= 0.92;
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
   }
-  // 浮动文字
   for (let i = floats.length - 1; i >= 0; i--) {
     const f = floats[i];
     f.y -= 30 * dt; f.life -= dt;
@@ -552,27 +835,43 @@ function update(dt) {
   if (cam.shake > 0) cam.shake -= dt * 30;
 }
 
+function updateSkillButtons() {
+  const map = {
+    bullet: { cd: skills.bullet.btnCd, max: skills.bullet.btnCdMax, enabled: true },
+    orbit:  { cd: skills.orbit.burstCd, max: skills.orbit.burstCdMax, enabled: skills.orbit.lvl > 0 },
+    aura:   { cd: skills.aura.novaCd,  max: skills.aura.novaCdMax,  enabled: skills.aura.lvl > 0 },
+    ult:    { cd: skills.ult.cd,       max: skills.ult.cdMax,       enabled: true },
+  };
+  for (const [name, info] of Object.entries(map)) {
+    const btn = document.querySelector(`.skill-btn[data-skill="${name}"]`);
+    if (!btn) continue;
+    const mask = btn.querySelector('.cd-mask');
+    const txt  = btn.querySelector('.cd-text');
+    // 未解锁：显示灰色
+    btn.style.opacity = info.enabled ? 1 : 0.35;
+    btn.style.filter = info.enabled ? 'none' : 'grayscale(.6)';
+    btn.classList.toggle('ready', info.enabled && info.cd <= 0);
+    if (info.cd > 0 && info.enabled) {
+      mask.classList.remove('hidden');
+      txt.textContent = info.cd.toFixed(1);
+    } else {
+      mask.classList.add('hidden');
+    }
+  }
+}
+
 function damageEnemy(e, dmg, idx, showNum) {
   e.hp -= dmg;
   e.hitFlash = 0.1;
-  if (showNum !== false) {/* 不显示伤害数字，避免太乱 */}
-  if (e.hp <= 0) {
-    killEnemy(e, idx);
-  }
+  if (e.hp <= 0) killEnemy(e, idx);
 }
 
 function killEnemy(e, idx) {
   spawnParticles(e.x, e.y, e.color, 10, 200);
   spawnGem(e.x, e.y, e.xp);
   player.kills++;
-  // 5% 几率掉额外拾取
   if (Math.random() < 0.02) spawnPickupAt(e.x, e.y);
   enemies.splice(idx, 1);
-}
-
-function spawnPickupAt(x, y) {
-  const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
-  pickups.push({ ...t, x: clamp(x, 30, W - 30), y: clamp(y, 30, H - 30), r: 14, life: 15, pulse: 0 });
 }
 
 function applyPickup(p) {
@@ -602,7 +901,7 @@ function gainXp(v) {
     player.xpNext = Math.floor(5 + player.level * 3 + player.level * player.level * 0.5);
     spawnParticles(player.x, player.y, '#8affd6', 20, 200);
     showLevelUp();
-    return; // 一次只升一级界面
+    return;
   }
 }
 
@@ -619,7 +918,6 @@ function gameOver() {
 
 // ============ 渲染 ============
 function drawBackground() {
-  // 暗夜渐变
   const g = ctx.createRadialGradient(player.x, player.y, 40, player.x, player.y, Math.max(W, H));
   g.addColorStop(0, '#11162a');
   g.addColorStop(0.5, '#0a0e1c');
@@ -627,14 +925,22 @@ function drawBackground() {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  // 星点
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
-  for (let i = 0; i < 40; i++) {
-    const x = (i * 137.5) % W, y = (i * 89.7 + ((time * 4) % H)) % H;
+  // 星点（视差）
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  for (let i = 0; i < 50; i++) {
+    const x = (i * 137.5) % W, y = (i * 89.7 + ((time * 6) % H)) % H;
     ctx.fillRect(x, y, 1.5, 1.5);
+  }
+  // 远景星
+  ctx.fillStyle = 'rgba(120,180,255,0.12)';
+  for (let i = 0; i < 25; i++) {
+    const x = ((i * 239.3) + time * 8) % W;
+    const y = (i * 151.9) % H;
+    ctx.fillRect(x, y, 2, 2);
   }
 }
 
+// ============ 战机造型（替换原圆形） ============
 function drawPlayer() {
   ctx.save();
   // 光环
@@ -647,25 +953,99 @@ function drawPlayer() {
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
-  // 拾取范围（淡）
+  // 拾取范围
   ctx.beginPath();
   ctx.arc(player.x, player.y, player.pickupRange, 0, TAU);
   ctx.strokeStyle = 'rgba(138,255,214,0.06)';
   ctx.stroke();
 
-  // 玩家本体
+  // 战机以机头方向为朝向，默认机头"向上"，因此把 facing + PI/2，使 Math.atan2(0,-1) = -PI/2 时战机垂直朝上
+  ctx.translate(player.x, player.y);
+  ctx.rotate(player.facing + Math.PI / 2);
+
   const blink = player.invuln > 0 && Math.floor(player.invuln * 20) % 2 === 0;
+  const R = player.r; // 16
+
+  // 尾焰（根据是否移动轻微抖动）
+  ctx.save();
+  ctx.shadowColor = '#4dd0ff'; ctx.shadowBlur = 22;
+  const flameH = 14 + Math.sin(time * 60) * 3;
+  const fg = ctx.createLinearGradient(0, R * 0.6, 0, R * 0.6 + flameH);
+  fg.addColorStop(0, 'rgba(255,220,150,0.95)');
+  fg.addColorStop(0.4, 'rgba(255,140,60,0.85)');
+  fg.addColorStop(1, 'rgba(77,120,255,0)');
+  ctx.fillStyle = fg;
+  ctx.beginPath();
+  ctx.moveTo(-R * 0.35, R * 0.55);
+  ctx.quadraticCurveTo(0, R * 0.55 + flameH + 6, R * 0.35, R * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  // 双小引擎喷口
+  ctx.fillStyle = 'rgba(150,220,255,0.85)';
+  ctx.beginPath(); ctx.arc(-R * 0.42, R * 0.52, 2.2, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.arc( R * 0.42, R * 0.52, 2.2, 0, TAU); ctx.fill();
+  ctx.restore();
+
+  // 机身外发光
   ctx.shadowColor = '#4dd0ff';
-  ctx.shadowBlur = 20;
-  ctx.fillStyle = blink ? '#ffffff' : '#5fe1ff';
+  ctx.shadowBlur = blink ? 28 : 18;
+
+  // 机翼（后掠翼，左右对称）
+  ctx.fillStyle = blink ? '#ffffff' : '#36c6e8';
   ctx.beginPath();
-  ctx.arc(player.x, player.y, player.r, 0, TAU);
+  ctx.moveTo(-R * 1.6,  R * 0.35); // 翼尖左
+  ctx.lineTo(-R * 0.55, R * 0.05); // 翼根左后
+  ctx.lineTo(-R * 0.35, -R * 0.1); // 翼根左前
+  ctx.lineTo(-R * 0.95, -R * 0.55); // 前缘转折
+  ctx.lineTo(-R * 0.35, -R * 0.4);
+  ctx.lineTo( R * 0.35, -R * 0.4);
+  ctx.lineTo( R * 0.95, -R * 0.55);
+  ctx.lineTo( R * 0.35, -R * 0.1);
+  ctx.lineTo( R * 0.55, R * 0.05);
+  ctx.lineTo( R * 1.6,  R * 0.35); // 翼尖右
+  ctx.lineTo( R * 0.8,  R * 0.5);
+  ctx.lineTo( R * 0.25, R * 0.6);
+  ctx.lineTo(-R * 0.25, R * 0.6);
+  ctx.lineTo(-R * 0.8,  R * 0.5);
+  ctx.closePath();
   ctx.fill();
+
   ctx.shadowBlur = 0;
-  ctx.fillStyle = '#0a1a26';
+
+  // 机身中央金属高光
+  const bodyGrad = ctx.createLinearGradient(0, -R, 0, R * 0.6);
+  bodyGrad.addColorStop(0, blink ? '#fff' : '#7ee8ff');
+  bodyGrad.addColorStop(0.5, blink ? '#e6faff' : '#2ca8cc');
+  bodyGrad.addColorStop(1, '#12384a');
+  ctx.fillStyle = bodyGrad;
   ctx.beginPath();
-  ctx.arc(player.x, player.y, player.r * 0.45, 0, TAU);
+  ctx.moveTo(0, -R * 1.15);         // 机头最前
+  ctx.quadraticCurveTo(R * 0.45, -R * 0.5, R * 0.35, R * 0.55);
+  ctx.lineTo(-R * 0.35, R * 0.55);
+  ctx.quadraticCurveTo(-R * 0.45, -R * 0.5, 0, -R * 1.15);
+  ctx.closePath();
   ctx.fill();
+
+  // 驾驶舱（深色玻璃，带高光）
+  ctx.fillStyle = '#082433';
+  ctx.beginPath();
+  ctx.ellipse(0, -R * 0.15, R * 0.22, R * 0.42, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(160,230,255,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(-R * 0.06, -R * 0.28, R * 0.08, R * 0.16, 0, 0, TAU);
+  ctx.fill();
+
+  // 机翼装饰线
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-R * 1.5, R * 0.3); ctx.lineTo(-R * 0.55, R * 0.08);
+  ctx.moveTo( R * 1.5, R * 0.3); ctx.lineTo( R * 0.55, R * 0.08);
+  ctx.moveTo(-R * 0.9, -R * 0.5); ctx.lineTo(-R * 0.4, -R * 0.38);
+  ctx.moveTo( R * 0.9, -R * 0.5); ctx.lineTo( R * 0.4, -R * 0.38);
+  ctx.stroke();
+
   ctx.restore();
 }
 
@@ -678,8 +1058,13 @@ function drawOrbit() {
     const oy = player.y + Math.sin(a) * o.radius;
     ctx.save();
     ctx.shadowColor = '#8affd6'; ctx.shadowBlur = 16;
-    ctx.fillStyle = '#bdffe6';
-    ctx.beginPath(); ctx.arc(ox, oy, 8, 0, TAU); ctx.fill();
+    // 光球本体（带拖尾感）
+    const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, 10);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.5, '#bdffe6');
+    g.addColorStop(1, 'rgba(138,255,214,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(ox, oy, 10, 0, TAU); ctx.fill();
     ctx.restore();
   }
 }
@@ -697,7 +1082,6 @@ function drawEnemy(e) {
   ctx.beginPath();
   ctx.arc(e.x, e.y, e.r * 0.4, 0, TAU);
   ctx.fill();
-  // 血条（多血敌人）
   if (e.maxHp > 20 && e.hp < e.maxHp) {
     const w = e.r * 2;
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -710,7 +1094,20 @@ function drawEnemy(e) {
 
 function drawBullet(b) {
   ctx.save();
+  // 拖尾
+  const len = 14;
+  const sp = Math.hypot(b.vx, b.vy) || 1;
+  const tx = b.x - (b.vx / sp) * len;
+  const ty = b.y - (b.vy / sp) * len;
+  const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
+  grad.addColorStop(0, 'rgba(138,255,214,0)');
+  grad.addColorStop(1, b.color);
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = b.r * 1.6;
+  ctx.lineCap = 'round';
   ctx.shadowColor = b.color; ctx.shadowBlur = 12;
+  ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+  // 弹头
   ctx.fillStyle = b.color;
   ctx.beginPath();
   ctx.arc(b.x, b.y, b.r, 0, TAU);
@@ -751,11 +1148,22 @@ function drawPickup(p) {
 
 function drawParticles() {
   for (const p of particles) {
-    ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r, 0, TAU);
-    ctx.fill();
+    if (p.kind === 'ring') {
+      const t = 1 - p.life / p.max;
+      const rr = p.r0 + (p.r - p.r0) * t;
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = 4 * (1 - t) + 1;
+      ctx.shadowColor = p.color; ctx.shadowBlur = 16;
+      ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, TAU); ctx.stroke();
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, TAU);
+      ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
 }
@@ -766,7 +1174,9 @@ function drawFloats() {
   for (const f of floats) {
     ctx.globalAlpha = clamp(f.life / f.max, 0, 1);
     ctx.fillStyle = f.color;
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
     ctx.fillText(f.txt, f.x, f.y);
+    ctx.shadowBlur = 0;
   }
   ctx.globalAlpha = 1;
 }
@@ -805,7 +1215,7 @@ function loop(ts) {
   if (!lastTime) lastTime = ts;
   let dt = (ts - lastTime) / 1000;
   lastTime = ts;
-  if (dt > 0.05) dt = 0.05; // 防止卡顿跳帧
+  if (dt > 0.05) dt = 0.05;
 
   if (state === STATE.PLAY) {
     update(dt);
@@ -814,7 +1224,6 @@ function loop(ts) {
     render();
     updateHUD();
   } else {
-    // 开始界面也渲染个背景动画
     drawBackground();
   }
   requestAnimationFrame(loop);
@@ -824,6 +1233,7 @@ function loop(ts) {
 document.getElementById('btnStart').onclick = () => {
   resetGame();
   document.getElementById('startScreen').classList.remove('show');
+  document.getElementById('controls').classList.add('show');
   state = STATE.PLAY;
 };
 document.getElementById('btnRetry').onclick = () => {
