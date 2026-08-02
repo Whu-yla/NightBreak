@@ -1,0 +1,37 @@
+{
+  "description": "暗夜突围 NightBreak - 微信小游戏",
+  "packOptions": {
+    "ignore": [
+      { "type": "file", "value": "index.html" },
+      { "type": "file", "value": "README.md" },
+      { "type": "dir", "value": "node_modules" },
+      { "type": "dir", "value": ".git" }
+    ]
+  },
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "newFeature": false,
+    "coverView": true,
+    "nodeModules": false,
+    "autoAudits": false,
+    "scopeDataCheck": false,
+    "uglifyFileName": false,
+    "checkInvalidKey": true,
+    "uploadWithSourceMap": true,
+    "compileHotReLoad": false,
+    "useMultiFrameRuntime": true,
+    "useApiHook": true,
+    "useApiHostProcess": true,
+    "showES6CompileOption": false,
+    "useCompilerPlugins": false
+  },
+  "compileType": "miniGame",
+  "libVersion": "3.3.4",
+  "appid": "touristappid",
+  "projectname": "nightbreak",
+  "condition": {}
+}
