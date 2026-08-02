@@ -34,7 +34,7 @@
     font-size: 9px; color: #8a93a6; white-space: nowrap; letter-spacing: .5px; }
 
   .overlay { position: absolute; inset: 0; z-index: 20; display: none; flex-direction: column; align-items: center; justify-content: center;
-    background: radial-gradient(circle at 50% 40%, rgba(20,24,40,.72), rgba(5,6,10,.94)); backdrop-filter: blur(4px); padding: 24px; text-align: center; }
+    background: radial-gradient(circle at 50% 40%, rgba(20,24,40,.72), rgba(5,6,10,.94)); backdrop-filter: blur(4px); padding: 24px; text-align: center; overflow-y: auto; }
   .overlay.show { display: flex; }
   .overlay h1 { font-size: 30px; letter-spacing: 4px; margin-bottom: 6px;
     background: linear-gradient(90deg,#4dd0ff 0%,#8affd6 50%,#ffe27a 100%);
@@ -84,6 +84,33 @@
   #goStats { display: grid; grid-template-columns: auto auto; gap: 8px 24px; margin: 14px 0 24px; font-size: 15px; }
   #goStats .k { color: #8a93a6; text-align: right; }
   #goStats .v { color: #ffe27a; font-weight: 700; text-align: left; }
+
+  #goSubmit { display: flex; gap: 10px; margin: 4px 0 16px; align-items: center; justify-content: center; }
+  #playerId { width: 200px; background: rgba(255,255,255,.06); border: 1.5px solid rgba(77,208,255,.4);
+    border-radius: 8px; padding: 10px 14px; font-size: 15px; color: #e8ecf3; outline: none; pointer-events: auto; }
+  #playerId::placeholder { color: #5a6478; }
+  #playerId:focus { border-color: #8affd6; box-shadow: 0 0 12px rgba(138,255,214,.3); }
+  .btn-sm { pointer-events: auto; background: linear-gradient(90deg, #4dd0ff, #8affd6); color: #06121a; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; box-shadow: 0 4px 14px rgba(77,208,255,.3); }
+  .btn-sm:active { transform: translateY(2px); }
+  .btn-rank { background: linear-gradient(90deg, #b066ff, #4dd0ff); box-shadow: 0 4px 14px rgba(176,102,255,.3); }
+
+  #rankBox { width: 100%; max-width: 460px; margin-top: 4px; }
+  #rankBox h3 { font-size: 14px; color: #8affd6; margin-bottom: 8px; letter-spacing: 2px; text-align: center; }
+  .rank-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; padding-right: 4px; }
+  .rank-list::-webkit-scrollbar { width: 4px; }
+  .rank-list::-webkit-scrollbar-thumb { background: rgba(77,208,255,.3); border-radius: 2px; }
+  .rank-item { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); font-size: 13px; }
+  .rank-item.me { background: rgba(77,208,255,.12); border-color: rgba(77,208,255,.45); box-shadow: 0 0 10px rgba(77,208,255,.15); }
+  .rank-item .rk { width: 26px; text-align: center; font-weight: 800; flex-shrink: 0; }
+  .rank-item .rk.gold { color: #ffe27a; text-shadow: 0 0 8px rgba(255,226,122,.5); }
+  .rank-item .rk.silver { color: #c8d0dc; }
+  .rank-item .rk.bronze { color: #cd7f4a; }
+  .rank-item .rid { flex: 1; color: #e8ecf3; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .rank-item .rsc { color: #ffe27a; font-weight: 700; flex-shrink: 0; }
+  .rank-item .rinfo { color: #8a93a6; font-size: 11px; flex-shrink: 0; }
+  .rank-empty { text-align: center; color: #5a6478; font-size: 13px; padding: 24px; }
 
   .btn { pointer-events: auto; background: linear-gradient(90deg, #4dd0ff, #8affd6); color: #06121a; border: none; border-radius: 10px;
     padding: 12px 30px; font-size: 16px; font-weight: 700; letter-spacing: 2px; cursor: pointer; box-shadow: 0 6px 20px rgba(77,208,255,.35); }
@@ -218,7 +245,10 @@
     电脑：WASD / 方向键移动 · 技能键 1 / 2 / 3 · R 终焉爆发<br>
     手机：左边圆盘控制方向 · 右边技能按钮点击释放（CD自动倒计时）
   </p>
-  <button class="btn" id="btnStart">开始突围</button>
+  <div style="display:flex;gap:12px;margin-bottom:24px">
+    <button class="btn" id="btnStart">开始突围</button>
+    <button class="btn-sm btn-rank" id="btnShowRank">排行榜</button>
+  </div>
 </div>
 
 <div class="overlay" id="levelScreen">
@@ -231,7 +261,19 @@
   <h1 style="background:none;-webkit-background-clip:initial;color:#ff6b8a;text-shadow:0 0 22px rgba(255,77,109,.5)">突 围 失 败</h1>
   <p class="sub">你的战机坠毁在暗夜中</p>
   <div id="goStats"></div>
-  <button class="btn" id="btnRetry">再次突围</button>
+  <div id="goSubmit">
+    <input id="playerId" type="text" maxlength="12" placeholder="输入你的ID" spellcheck="false" autocomplete="off">
+    <button class="btn-sm" id="btnSubmit">提交上榜</button>
+  </div>
+  <div id="rankBox" style="display:none"><h3>暗 夜 英 雄 榜</h3><div class="rank-list" id="rankList"></div></div>
+  <button class="btn" id="btnRetry" style="margin-top:16px">再次突围</button>
+</div>
+
+<div class="overlay" id="rankScreen">
+  <h1 style="font-size:26px">排 行 榜</h1>
+  <p class="sub">暗 夜 英 雄 榜</p>
+  <div style="width:100%;max-width:460px"><div class="rank-list" id="rankListFull" style="max-height:360px"></div></div>
+  <button class="btn" id="btnCloseRank" style="margin-top:20px">返回</button>
 </div>
 
 <div class="hint">靠近经验宝石自动拾取 · 击败Boss有传说装备掉落</div>
@@ -875,6 +917,38 @@ function gainXp(v){
     player.xpNext = Math.floor(5 + player.level*3 + player.level*player.level*0.5);
     spawnParticles(player.x,player.y,'#8affd6',20,200); showLevelUp(); return; }
 }
+// 排行榜
+const RANK_KEY = 'nightbreak_rank_v1';
+const ID_KEY = 'nightbreak_last_id';
+function loadRank(){ try { return JSON.parse(localStorage.getItem(RANK_KEY)||'[]'); } catch(e){ return []; } }
+function saveRank(list){ try { localStorage.setItem(RANK_KEY, JSON.stringify(list.slice(0,20))); } catch(e){} }
+function calcScore(){ return player.level*1000 + player.kills*50 + Math.floor(time); }
+function submitScore(id){
+  const list = loadRank();
+  const entry = { id, score: calcScore(), level: player.level, kills: player.kills, time: Math.floor(time), wave, date: Date.now() };
+  list.push(entry);
+  list.sort((a,b) => b.score - a.score);
+  saveRank(list);
+  return entry;
+}
+function escapeHtml(s){ return String(s).replace(/[<>&"]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+function renderRank(containerId, highlightEntry){
+  const list = loadRank();
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  if(list.length===0){ el.innerHTML = '<div class="rank-empty">暂无记录，快来成为第一位上榜者！</div>'; return; }
+  el.innerHTML = list.slice(0,20).map((r,i)=>{
+    const medal = i===0?'gold':i===1?'silver':i===2?'bronze':'';
+    const me = highlightEntry && r.id===highlightEntry.id && r.score===highlightEntry.score && r.date===highlightEntry.date;
+    const m=Math.floor(r.time/60), s=r.time%60;
+    return `<div class="rank-item${me?' me':''}">
+      <span class="rk ${medal}">${i+1}</span>
+      <span class="rid">${escapeHtml(r.id)}</span>
+      <span class="rsc">${r.score}</span>
+      <span class="rinfo">Lv.${r.level} · ${r.kills}杀 · ${m}:${String(s).padStart(2,'0')}</span>
+    </div>`;
+  }).join('');
+}
 function gameOver(){
   state=STATE.OVER;
   const m=Math.floor(time/60),s=Math.floor(time%60);
@@ -882,7 +956,11 @@ function gameOver(){
     `<div class="k">存活时间</div><div class="v">${m}:${String(s).padStart(2,'0')}</div>`+
     `<div class="k">到达等级</div><div class="v">Lv.${player.level}</div>`+
     `<div class="k">击杀数</div><div class="v">${player.kills}</div>`+
-    `<div class="k">波次</div><div class="v">${wave}</div>`;
+    `<div class="k">波次</div><div class="v">${wave}</div>`+
+    `<div class="k">总得分</div><div class="v" style="color:#8affd6">${calcScore()}</div>`;
+  document.getElementById('goSubmit').style.display='flex';
+  document.getElementById('rankBox').style.display='none';
+  document.getElementById('playerId').value = localStorage.getItem(ID_KEY)||'';
   document.getElementById('overScreen').classList.add('show');
 }
 
@@ -1234,6 +1312,26 @@ document.getElementById('btnRetry').onclick = () => {
   resetGame();
   document.getElementById('overScreen').classList.remove('show');
   state = STATE.PLAY;
+};
+document.getElementById('btnSubmit').onclick = () => {
+  let id = document.getElementById('playerId').value.trim();
+  if(!id){ document.getElementById('playerId').focus(); return; }
+  if(id.length>12) id = id.slice(0,12);
+  localStorage.setItem(ID_KEY, id);
+  const entry = submitScore(id);
+  document.getElementById('goSubmit').style.display='none';
+  document.getElementById('rankBox').style.display='block';
+  renderRank('rankList', entry);
+};
+document.getElementById('playerId').addEventListener('keydown', e => {
+  if(e.key==='Enter'){ e.preventDefault(); document.getElementById('btnSubmit').click(); }
+});
+document.getElementById('btnShowRank').onclick = () => {
+  renderRank('rankListFull');
+  document.getElementById('rankScreen').classList.add('show');
+};
+document.getElementById('btnCloseRank').onclick = () => {
+  document.getElementById('rankScreen').classList.remove('show');
 };
 
 requestAnimationFrame(loop);
