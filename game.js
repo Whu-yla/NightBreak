@@ -151,16 +151,32 @@ function processSprite(key, img) {
   let data;
   try { data = cx.getImageData(0, 0, w, h); } catch (e) { SPRITES[key] = img; return; }
   const d = data.data;
-  // 抠白：亮度高且饱和度低（接近白/浅灰）的像素变透明，用羽化避免锯齿
+  // 采样四角作为背景色参考（JPG 白底通常不是纯白，有压缩噪点）
+  const cornerIdx = [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]];
+  let br = 0, bg = 0, bb = 0;
+  for (const [px, py] of cornerIdx) { const i = (py * w + px) * 4; br += d[i]; bg += d[i + 1]; bb += d[i + 2]; }
+  br /= 4; bg /= 4; bb /= 4;
+  const bgLight = (Math.max(br, bg, bb) + Math.min(br, bg, bb)) / 2;
+  // 亮度阈值：取采样背景亮度 - 20，但不低于 175（避免误抠明亮主体）
+  const threshL = Math.max(175, bgLight - 20);
   for (let i = 0; i < d.length; i += 4) {
     const r = d[i], g = d[i + 1], b = d[i + 2];
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
     const sat = mx - mn;            // 饱和度
     const light = (mx + mn) / 2;    // 亮度
-    if (light > 215 && sat < 28) {
-      // 越白越透明，做羽化
-      const t = (light - 215) / 40;
-      d[i + 3] = Math.max(0, Math.round(d[i + 3] * (1 - Math.min(1, t))));
+    if (light > threshL && sat < 45) {
+      // 越白越透明：亮度+饱和度联合判定，平滑过渡
+      const lightT = clamp((light - threshL) / (255 - threshL), 0, 1);
+      const satT = clamp(1 - sat / 45, 0, 1);
+      const reduce = Math.min(1, lightT * 1.4 + satT * 0.4);
+      d[i + 3] = Math.max(0, Math.round(d[i + 3] * (1 - reduce)));
+      // 关键：残留半透明像素降低 RGB，避免合成时残留白边光晕（色彩去污染）
+      if (reduce > 0 && reduce < 1) {
+        const keep = 1 - reduce * 0.55;
+        d[i] = Math.round(r * keep);
+        d[i + 1] = Math.round(g * keep);
+        d[i + 2] = Math.round(b * keep);
+      }
     }
   }
   cx.putImageData(data, 0, 0);
@@ -241,7 +257,7 @@ const skills = {
   aura: { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, novaCd: 0, novaCdMax: 6.0 },
   chain: { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2 },
   frost: { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3 },
-  laser: { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 10, angle: 0, sweep: 0.25, tickTimer: 0 },
+  laser: { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0 },
   boomerang: { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320 },
   ult: { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 20, cd: 0, dmg: 60, radius: 160 },
 };
@@ -333,14 +349,33 @@ function computeSynergies() {
 }
 function pickupEquipment(eqPick) {
   const cur = equipment[eqPick.slot];
-  const order = { common: 1, rare: 2, epic: 3, legend: 4 };
-  if (!cur || order[eqPick.rarity] >= order[cur.rarity]) {
-    if (cur) { const xpGain = (cur.rarity === 'legend' ? 20 : cur.rarity === 'epic' ? 10 : cur.rarity === 'rare' ? 5 : 2); gainXp(xpGain);
-      floatText(player.x, player.y - 40, '分解+' + xpGain + '经验', '#9aa6b8'); }
+  // 槽位为空：直接装备
+  if (!cur) {
     equipment[eqPick.slot] = eqPick; applyEquipStats(); Audio.equip();
     if (player.hp > player.maxHp) player.hp = player.maxHp;
-    floatText(player.x, player.y - 28, '获得 ' + RARITY[eqPick.rarity].name + ' ' + EQ_SLOT_NAME[eqPick.slot], RARITY[eqPick.rarity].color);
-  } else { const xpGain = 3; gainXp(xpGain); floatText(player.x, player.y - 28, '分解为 +' + xpGain + ' 经验', '#9aa6b8'); }
+    floatText(player.x, player.y - 28, '装备 ' + RARITY[eqPick.rarity].name + EQ_SLOT_NAME[eqPick.slot], RARITY[eqPick.rarity].color);
+    return;
+  }
+  // 同槽位：成长升级（白→蓝→史诗→传说），叠加属性
+  const order = ['common', 'rare', 'epic', 'legend'];
+  const curIdx = order.indexOf(cur.rarity);
+  if (curIdx >= order.length - 1) {
+    // 已传说满级：分解为经验
+    gainXp(15); floatText(player.x, player.y - 28, '传说满级 +15 经验', '#ffe27a');
+    return;
+  }
+  const newRarity = order[curIdx + 1];
+  cur.rarity = newRarity;
+  // 叠加新装备的属性到现有装备
+  for (const [k, v] of Object.entries(eqPick.stats)) {
+    cur.stats[k] = (cur.stats[k] || 0) + v;
+  }
+  applyEquipStats(); Audio.equip();
+  if (player.hp > player.maxHp) player.hp = player.maxHp;
+  spawnParticles(player.x, player.y, RARITY[newRarity].color, 20, 240);
+  spawnParticles(player.x, player.y, '#ffffff', 8, 180);
+  floatText(player.x, player.y - 28, EQ_SLOT_NAME[eqPick.slot] + ' 成长 → ' + RARITY[newRarity].name, RARITY[newRarity].color);
+  floatText(player.x, player.y - 50, '属性已叠加', '#ffe27a');
 }
 
 // ========== 连击系统 ==========
@@ -1112,7 +1147,7 @@ function resetGame() {
   skills.aura = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, novaCd: 0, novaCdMax: 6.0 };
   skills.chain = { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2 };
   skills.frost = { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3 };
-  skills.laser = { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 10, angle: 0, sweep: 0.25, tickTimer: 0 };
+  skills.laser = { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0 };
   skills.boomerang = { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320 };
   skills.ult = { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 20, cd: 0, dmg: 60, radius: 160 };
   enemies = []; bullets = []; particles = []; gems = []; pickups = []; floats = [];
@@ -1242,7 +1277,9 @@ function killBoss() {
 // ========== 粒子/浮字/宝石/拾取 ==========
 function spawnParticles(x, y, color, n, spd) {
   for (let i = 0; i < n; i++) { const a = rand(0, TAU), s = rand(spd * 0.3, spd);
-    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.3, 0.7), max: 0.7, color, r: rand(1.5, 3.5) }); } }
+    // 25% 概率使用更亮的颜色作为闪烁粒子，丰富色彩层次
+    const c = Math.random() < 0.25 ? lighten(color, 0.45) : color;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.4, 0.9), max: 0.9, color: c, r: rand(1.8, 3.8), trail: [] }); } }
 function spawnSparks(x, y, color, n, spd) {
   for (let i = 0; i < n; i++) { const a = rand(0, TAU), s = rand(spd * 0.5, spd);
     const life = rand(0.2, 0.45);
@@ -1445,19 +1482,29 @@ function update(dt) {
       spawnParticles(player.x, player.y, '#9fd6ff', 26, 220); Audio.frost();
     }
   }
-  // 6.激光
+  // 6.激光（自动锁定+扇形扫射，无需操作即可覆盖敌群）
   const la = skills.laser;
   if (la.lvl > 0) {
+    const reach = 640;
     const tgt = findClosestEnemy(player.x, player.y);
-    const targetAng = tgt ? Math.atan2(tgt.y - player.y, tgt.x - player.x) : player.facing;
+    let targetAng = tgt ? Math.atan2(tgt.y - player.y, tgt.x - player.x) : player.facing;
+    // 自动扫射：在主目标周围扇形来回扫，覆盖更多敌人（范围随等级增长）
+    la.sweepPhase = (la.sweepPhase || 0) + dt * 5;
+    const sweepRange = Math.min(0.55, 0.10 + la.lvl * 0.11); // lvl1:0.21 → lvl5:0.55
+    targetAng += Math.sin(la.sweepPhase) * sweepRange;
+    // 快速跟踪（原 dt*4 太迟钝，提速到 dt*11，几乎瞬跟）
     let d = targetAng - la.angle; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
-    la.angle += d * Math.min(1, dt * 4);
+    la.angle += d * Math.min(1, dt * 11);
     la.tickTimer -= dt;
-    if (la.tickTimer <= 0) { la.tickTimer = 0.1;
-      const cx = player.x, cy = player.y, a = la.angle, reach = 640;
+    if (la.tickTimer <= 0) { la.tickTimer = 0.08;
+      const cx = player.x, cy = player.y, a = la.angle;
       const endX = cx + Math.cos(a) * reach, endY = cy + Math.sin(a) * reach;
-      for (let i = 0; i < enemies.length; i++) { const e = enemies[i]; if (pointToSegDist(e.x, e.y, cx, cy, endX, endY) < la.width / 2 + e.r) damageEnemy(e, la.dps * 0.1, i, false); }
-      if (boss && pointToSegDist(boss.x, boss.y, cx, cy, endX, endY) < la.width / 2 + boss.r) damageBoss(la.dps * 0.07);
+      const halfW = la.width / 2;
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (pointToSegDist(e.x, e.y, cx, cy, endX, endY) < halfW + e.r) damageEnemy(e, la.dps * 0.08, i, false);
+      }
+      if (boss && pointToSegDist(boss.x, boss.y, cx, cy, endX, endY) < halfW + boss.r) damageBoss(la.dps * 0.06);
     }
     lasers.push({ x1: player.x, y1: player.y, a: la.angle, w: la.width, life: 0.06, max: 0.06 });
   }
@@ -1631,7 +1678,11 @@ function update(dt) {
         spawnParticles(player.x, player.y, '#ff4d6d', 6, 140); particles.splice(i, 1);
         if (player.hp <= 0) { player.hp = 0; gameOver(); return; }
       }
-    } else { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; if (p.life <= 0) particles.splice(i, 1); }
+    } else {
+      // 普通粒子：记录拖尾（最多5个历史点）
+      if (p.trail) { p.trail.push({ x: p.x, y: p.y }); if (p.trail.length > 5) p.trail.shift(); }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; if (p.life <= 0) particles.splice(i, 1);
+    }
   }
   // 浮字
   for (let i = floats.length - 1; i >= 0; i--) { const f = floats[i]; f.y -= 30 * dt; f.life -= dt; if (f.life <= 0) floats.splice(i, 1); }
@@ -2050,18 +2101,34 @@ function drawChains() {
   }
 }
 function drawLasers() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter'; // 加法混合：多层叠加更亮
   for (const l of lasers) {
     const a = clamp(l.life / l.max, 0, 1); const reach = 640;
     const x2 = l.x1 + Math.cos(l.a) * reach, y2 = l.y1 + Math.sin(l.a) * reach;
-    ctx.save();
-    ctx.strokeStyle = `rgba(255,120,170,${0.45 * a})`; ctx.lineWidth = l.w * 2.2; ctx.lineCap = 'round';
-    ctx.shadowColor = '#ff4d8a'; ctx.shadowBlur = 22;
+    ctx.lineCap = 'round';
+    // 外光晕（最宽最暗）
+    ctx.strokeStyle = `rgba(255,80,150,${0.22 * a})`; ctx.lineWidth = l.w * 3.6;
     ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(x2, y2); ctx.stroke();
-    ctx.strokeStyle = `rgba(255,255,255,${0.95 * a})`; ctx.lineWidth = l.w * 0.7;
+    // 中层光晕
+    ctx.strokeStyle = `rgba(255,130,180,${0.45 * a})`; ctx.lineWidth = l.w * 2.1;
     ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(x2, y2); ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(l.x1, l.y1, l.w * 0.8, 0, TAU); ctx.fill();
-    ctx.restore();
+    // 内层（粉白）
+    ctx.strokeStyle = `rgba(255,200,220,${0.85 * a})`; ctx.lineWidth = l.w * 1.1;
+    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(x2, y2); ctx.stroke();
+    // 核心白线
+    ctx.strokeStyle = `rgba(255,255,255,${0.95 * a})`; ctx.lineWidth = l.w * 0.45;
+    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(x2, y2); ctx.stroke();
+    // 起点光球
+    ctx.fillStyle = `rgba(255,180,210,${a})`;
+    ctx.beginPath(); ctx.arc(l.x1, l.y1, l.w * 1.1, 0, TAU); ctx.fill();
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.beginPath(); ctx.arc(l.x1, l.y1, l.w * 0.5, 0, TAU); ctx.fill();
+    // 终点火花
+    ctx.fillStyle = `rgba(255,150,180,${a * 0.7})`;
+    ctx.beginPath(); ctx.arc(x2, y2, l.w * 0.8, 0, TAU); ctx.fill();
   }
+  ctx.restore();
 }
 function drawFrosts() {
   for (const f of frosts) {
@@ -2251,10 +2318,36 @@ function drawParticles() {
       ctx.closePath(); ctx.fill();
       ctx.restore(); ctx.shadowBlur = 0;
     } else {
-      ctx.globalAlpha = a; ctx.fillStyle = p.color;
+      // 默认粒子：发光圆 + 拖尾 + 白色核心（加法混合，重叠更亮）
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      // 拖尾
+      if (p.trail && p.trail.length > 1) {
+        for (let j = 0; j < p.trail.length; j++) {
+          const t = p.trail[j];
+          const tf = (j + 1) / p.trail.length;
+          ctx.globalAlpha = a * tf * 0.4;
+          ctx.fillStyle = p.color;
+          ctx.beginPath(); ctx.arc(t.x, t.y, p.r * tf * 0.8, 0, TAU); ctx.fill();
+        }
+      }
+      // 外光晕（大而暗）
+      ctx.globalAlpha = a * 0.35;
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 2.6, 0, TAU); ctx.fill();
+      // 中层
+      ctx.globalAlpha = a * 0.7;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.4, 0, TAU); ctx.fill();
+      // 核心
+      ctx.globalAlpha = a;
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
-      if (a > 0.5) { ctx.globalAlpha = a * 0.5; ctx.fillStyle = '#fff';
-        ctx.beginPath(); ctx.arc(p.x - p.r * 0.3, p.y - p.r * 0.3, p.r * 0.3, 0, TAU); ctx.fill(); }
+      // 白色高光（亮点）
+      if (a > 0.4) {
+        ctx.globalAlpha = a * 0.85;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(p.x - p.r * 0.2, p.y - p.r * 0.2, p.r * 0.45, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
     }
   }
   ctx.globalAlpha = 1;
