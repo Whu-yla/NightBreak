@@ -379,6 +379,15 @@ const EQ_STAT_POOL = {
   boots: [['speed', 0.10, '移速 +10%'], ['pickupRange', 0.25, '拾取范围 +25%'], ['maxHp', 15, '最大生命 +15']],
   amulet: [['xpMult', 0.15, '经验获取 +15%'], ['allDmg', 0.08, '全技能伤害 +8%'], ['regen', 0.8, '每秒回复 +0.8'], ['bulletPierce', 1, '弹幕穿透 +1']],
 };
+// 装备随机前缀：30%概率获得前缀（额外附魔一条随机属性），增强装备随机性
+const EQ_PREFIXES = [
+  { tag: '锋利', stat: 'allDmg', val: 0.06 },
+  { tag: '坚固', stat: 'damageReduction', val: 0.04 },
+  { tag: '迅捷', stat: 'speed', val: 0.06 },
+  { tag: '智慧', stat: 'xpMult', val: 0.10 },
+  { tag: '吸血', stat: 'regen', val: 0.6 },
+  { tag: '巨力', stat: 'maxHp', val: 15 },
+];
 function rollEquipment(slot, rarity) {
   const pool = EQ_STAT_POOL[slot]; const stats = {}; const picked = [];
   const statCount = rarity === 'legend' ? 4 : rarity === 'epic' ? 3 : rarity === 'rare' ? 2 : 1;
@@ -387,7 +396,15 @@ function rollEquipment(slot, rarity) {
     picked.push(i); const [key, val] = pool[i];
     stats[key] = (stats[key] || 0) + val * RARITY[rarity].mult;
   }
-  return { slot, rarity, stats };
+  // 随机前缀附魔（30%概率，稀有度越高概率越大）
+  let prefix = '';
+  const prefixChance = rarity === 'legend' ? 0.6 : rarity === 'epic' ? 0.45 : rarity === 'rare' ? 0.3 : 0.15;
+  if (Math.random() < prefixChance) {
+    const p = EQ_PREFIXES[randi(0, EQ_PREFIXES.length - 1)];
+    prefix = p.tag;
+    stats[p.stat] = (stats[p.stat] || 0) + p.val * RARITY[rarity].mult;
+  }
+  return { slot, rarity, stats, prefix };
 }
 function applyEquipStats() {
   player.maxHp = 100; player.speed = 180; player.pickupRange = 90;
@@ -475,12 +492,18 @@ function pickupEquipment(eqPick) {
   for (const [k, v] of Object.entries(eqPick.stats)) {
     cur.stats[k] = (cur.stats[k] || 0) + v;
   }
+  // 前缀继承：若新装备有前缀而旧装备没有，50%概率获得该前缀（增强随机性）
+  if (eqPick.prefix && !cur.prefix && Math.random() < 0.5) {
+    cur.prefix = eqPick.prefix;
+    floatText(player.x, player.y - 50, '附魔：' + cur.prefix, '#ffd86b');
+  }
   applyEquipStats(); Audio.equip();
   if (player.hp > player.maxHp) player.hp = player.maxHp;
   spawnParticles(player.x, player.y, RARITY[newRarity].color, 20, 240);
   spawnParticles(player.x, player.y, '#ffffff', 8, 180);
-  floatText(player.x, player.y - 28, EQ_SLOT_NAME[eqPick.slot] + ' 成长 → ' + RARITY[newRarity].name, RARITY[newRarity].color);
-  floatText(player.x, player.y - 50, '属性已叠加', '#ffe27a');
+  const prefixTxt = cur.prefix ? '【' + cur.prefix + '】' : '';
+  floatText(player.x, player.y - 28, prefixTxt + EQ_SLOT_NAME[eqPick.slot] + ' 成长 → ' + RARITY[newRarity].name, RARITY[newRarity].color);
+  floatText(player.x, player.y - 60, '属性已叠加', '#ffe27a');
 }
 
 // ========== 连击系统 ==========
@@ -545,6 +568,103 @@ let boss = null;
 let time = 0, spawnTimer = 0, pickupTimer = 8, wave = 1, lastTime = 0;
 const upgradeLevels = {};
 
+// ========== 随机奇遇事件系统 ==========
+// 每隔 60~90s 触发一个随机事件，打破固定节奏，增强随机性
+// 事件类型：精英潮/宝箱雨/狂暴增益/护盾庇护/陷阱刷新/双倍经验/陨石轰炸
+const RANDOM_EVENTS = [
+  { id: 'elite', name: '精英来袭', desc: '一群精英怪包围了你！', color: '#ff5a3c', icon: '☠' },
+  { id: 'chest', name: '宝箱雨', desc: '天降宝箱，抢夺经验！', color: '#ffe27a', icon: '◆' },
+  { id: 'frenzy', name: '狂暴之力', desc: '8秒内伤害提升50%', color: '#ff3a8a', icon: '⚡' },
+  { id: 'shield', name: '神圣庇护', desc: '6秒无敌护盾', color: '#5cffb0', icon: '🛡' },
+  { id: 'trap', name: '陷阱再生', desc: '地图刷新一批黑洞陷阱', color: '#b066ff', icon: '◉' },
+  { id: 'doublexp', name: '双倍经验', desc: '10秒经验翻倍', color: '#8affd6', icon: '✦' },
+  { id: 'meteor', name: '陨石轰炸', desc: '天降陨石清扫全场！', color: '#ffaa33', icon: '✺' },
+  { id: 'heal', name: '生命泉涌', desc: '瞬间回满生命', color: '#5dff9b', icon: '✚' },
+];
+let eventTimer = 0;       // 距离下次事件触发倒计时
+let activeEvent = null;   // 当前生效中的事件 { id, name, desc, color, icon, dur, max }
+let eventBannerTimer = 0; // 事件横幅显示时间
+let frenzyBuff = 0;       // 狂暴伤害加成剩余时间
+let shieldBuff = 0;       // 护盾剩余时间
+let doubleXpBuff = 0;     // 双倍经验剩余时间
+function pickRandomEvent() {
+  // 后期(>180s)才可能出现陨石轰炸等高危事件
+  let pool = RANDOM_EVENTS;
+  if (time < 180) pool = RANDOM_EVENTS.filter(e => e.id !== 'meteor');
+  return pool[randi(0, pool.length - 1)];
+}
+function triggerRandomEvent() {
+  const ev = pickRandomEvent();
+  activeEvent = { ...ev, dur: 0, max: 0 };
+  eventBannerTimer = 3.0;
+  cam.shake = 8;
+  Audio.bossWarn();
+  switch (ev.id) {
+    case 'elite': {
+      // 在玩家四周生成6个精英怪
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * TAU + rand(-0.2, 0.2);
+        const d = rand(220, 320);
+        spawnEnemyAt(player.x + Math.cos(a) * d, player.y + Math.sin(a) * d, 'brute', true);
+      }
+      break;
+    }
+    case 'chest': {
+      for (let i = 0; i < 5; i++) {
+        const a = rand(0, TAU), d = rand(80, 200);
+        pickups.push({ ...PICKUP_TYPES[3], x: player.x + Math.cos(a) * d, y: player.y + Math.sin(a) * d, r: 14, life: 25, pulse: 0 });
+      }
+      break;
+    }
+    case 'frenzy': frenzyBuff = 8; activeEvent.max = 8; break;
+    case 'shield': shieldBuff = 6; player.invuln = 6; activeEvent.max = 6; break;
+    case 'trap': {
+      for (let i = 0; i < 3; i++) {
+        let tx, ty, tries = 0;
+        do { tx = rand(MAP_W * 0.15, MAP_W * 0.85); ty = rand(MAP_H * 0.15, MAP_H * 0.85); tries++; }
+        while (dist2(tx, ty, player.x, player.y) < 350 * 350 && tries < 30);
+        traps.push({ x: tx, y: ty, killR: 34, pullR: 135, spin: rand(0, TAU) });
+      }
+      break;
+    }
+    case 'doublexp': doubleXpBuff = 10; activeEvent.max = 10; break;
+    case 'meteor': {
+      // 全屏陨石：对视野内所有敌人造成大量伤害
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (e.x > cam.followX - 50 && e.x < cam.followX + W + 50 && e.y > cam.followY - 50 && e.y < cam.followY + H + 50) {
+          spawnParticles(e.x, e.y, '#ffaa33', 8, 200);
+          damageEnemy(e, 80 + time * 0.8, i);
+        }
+      }
+      if (boss) damageBoss(80 + time * 0.8);
+      cam.shake = 16; flashScreen = 0.3;
+      // 陨石视觉特效
+      for (let i = 0; i < 12; i++) {
+        const mx = cam.followX + rand(0, W), my = cam.followY + rand(0, H);
+        spawnParticles(mx, my, '#ff6633', 10, 280);
+      }
+      break;
+    }
+    case 'heal': player.hp = player.maxHp; spawnParticles(player.x, player.y, '#5dff9b', 30, 240); break;
+  }
+}
+function updateRandomEvents(dt) {
+  eventTimer -= dt;
+  if (eventTimer <= 0) { triggerRandomEvent(); eventTimer = rand(60, 90); }
+  if (eventBannerTimer > 0) eventBannerTimer = Math.max(0, eventBannerTimer - dt);
+  if (frenzyBuff > 0) frenzyBuff = Math.max(0, frenzyBuff - dt);
+  if (shieldBuff > 0) shieldBuff = Math.max(0, shieldBuff - dt);
+  if (doubleXpBuff > 0) doubleXpBuff = Math.max(0, doubleXpBuff - dt);
+  if (activeEvent && activeEvent.max > 0) {
+    activeEvent.dur += dt;
+    if (activeEvent.dur >= activeEvent.max) activeEvent = null;
+  } else if (activeEvent && activeEvent.max === 0) {
+    // 一次性事件，横幅消失后清空
+    if (eventBannerTimer <= 0) activeEvent = null;
+  }
+}
+
 // ========== 输入系统：固定虚拟摇杆 + 技能按钮 ==========
 // 固定摇杆位置（左下方，王者荣耀式），考虑 safeArea 避开刘海
 const JOY_CX = Math.max(70, W * 0.16) + SAFE_L;
@@ -560,21 +680,22 @@ const joystick = {
 function isInJoyZone(x, y) { return x < W * 0.45 && y > H * 0.35; }
 
 // 技能按钮布局（右下方 2×2 网格），考虑 safeArea
-// 3个小技能槽（左上、右上、左下）+ 1终极技能槽（右下），动态填充
-const SK_R = Math.min(W * 0.085, 34);
+// 3个小技能槽（左上、右上、左下）+ 1终极技能槽（右下，更大），动态填充
+const SK_R = Math.min(W * 0.082, 32);
+const ULT_R = SK_R * 1.28; // 终极技能按钮更大，参考王者荣耀大招按钮
 const SK_GAP = SK_R * 0.5;
 const SK_M = 16;
 const SK_RIGHT_X = W - SK_R - SK_M - SAFE_R;
 const SK_LEFT_X = SK_RIGHT_X - SK_R * 2 - SK_GAP;
 const SK_BOTTOM_Y = H - SK_R - SK_M - 8 - SAFE_B;
 const SK_TOP_Y = SK_BOTTOM_Y - SK_R * 2 - SK_GAP;
-// 4个固定位置：3个小技能槽 + 1终极槽
+// 4个固定位置：3个小技能槽 + 1终极槽（终极偏右下且更大）
 const SK_SLOTS = [
   { cx: SK_LEFT_X, cy: SK_TOP_Y, r: SK_R },    // 槽位1
   { cx: SK_RIGHT_X, cy: SK_TOP_Y, r: SK_R },   // 槽位2
   { cx: SK_LEFT_X, cy: SK_BOTTOM_Y, r: SK_R }, // 槽位3
 ];
-const ULT_SLOT = { cx: SK_RIGHT_X, cy: SK_BOTTOM_Y, r: SK_R };
+const ULT_SLOT = { cx: W - ULT_R - SK_M - SAFE_R, cy: H - ULT_R - SK_M - 4 - SAFE_B, r: ULT_R };
 // 获取当前帧的技能按钮（动态：3个小技能 + 1终极）
 function getSkillButtons() {
   const btns = {};
@@ -861,6 +982,11 @@ function drawEquipBar() {
       roundRect(ctx, x, y, slotSize, slotSize, 8); ctx.stroke();
       ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillStyle = rc; ctx.fillText(EQ_SLOT_ICON[slot], x + slotSize / 2, y + slotSize / 2 + 1);
+      // 前缀标识（有附魔时显示金色小点）
+      if (eq.prefix) {
+        ctx.beginPath(); ctx.arc(x + slotSize - 5, y + 5, 2.5, 0, TAU);
+        ctx.fillStyle = '#ffd86b'; ctx.shadowColor = '#ffd86b'; ctx.shadowBlur = 4; ctx.fill(); ctx.shadowBlur = 0;
+      }
     } else {
       ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1;
       roundRect(ctx, x, y, slotSize, slotSize, 8); ctx.stroke();
@@ -915,11 +1041,28 @@ function drawJoystick() {
   ctx.beginPath(); ctx.arc(joystick.knobX, joystick.knobY, JOY_KNOB_R, 0, TAU); ctx.stroke();
 }
 
+// 技能图标主色（每个技能一个辨识色）
+const SKILL_COLORS = {
+  orbit: '#5cffb0', aura: '#c08bff', chain: '#ffe23a', frost: '#5ec8ff', laser: '#ff5c8a', boomerang: '#ffd86b', ult: '#ffb02e',
+};
+// 技能图标符号（更精致的几何符号）
+const SKILL_ICONS = {
+  orbit: '◈', aura: '❂', chain: '⚡', frost: '❅', laser: '⟿', boomerang: '✦', ult: '✺',
+};
+// 绘制六角形路径（用于终极技能按钮）
+function hexPath(cx, cy, r, rot) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = rot + i * Math.PI / 3;
+    const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
 function drawSkillButtons() {
-  // 动态获取技能按钮（3个小技能 + 1终极）
   const btns = getSkillButtons();
-  // 每个技能的CD/颜色信息
-  const skillColors = { orbit: '#bdffe6', aura: '#d9a8ff', chain: '#ffea00', frost: '#9fd6ff', laser: '#ff4d8a', boomerang: '#ffe27a', ult: '#ffd86b' };
+  const pulseT = 0.5 + 0.5 * Math.sin(time * 4); // 终极就绪脉冲
+  const rot = time * 0.6; // 终极光环旋转
   for (const [name, btn] of Object.entries(btns)) {
     const isEmpty = name.startsWith('_empty');
     const isUlt = name === 'ult';
@@ -927,39 +1070,130 @@ function drawSkillButtons() {
     const cd = isEmpty ? 0 : (isUlt ? sk.cd : (sk.btnCd || 0));
     const cdMax = isEmpty ? 1 : (isUlt ? sk.cdMax : (sk.btnCdMax || 1));
     const enabled = isEmpty ? false : (isUlt ? ultUnlocked : sk.lvl > 0);
-    const iconColor = isEmpty ? '#5a6478' : (skillColors[name] || '#8affd6');
+    const ready = enabled && cd <= 0;
+    const iconColor = isEmpty ? '#4a5468' : (SKILL_COLORS[name] || '#8affd6');
+    const icon = isEmpty ? '?' : (isUlt ? SKILL_ICONS.ult : (SKILL_ICONS[name] || '✦'));
     const r = btn.r;
-    // 按钮背景
-    const bgGrad = ctx.createLinearGradient(btn.cx - r, btn.cy - r, btn.cx + r, btn.cy + r);
-    if (isUlt) { bgGrad.addColorStop(0, 'rgba(80,60,20,0.95)'); bgGrad.addColorStop(1, 'rgba(40,30,10,0.95)'); }
-    else { bgGrad.addColorStop(0, 'rgba(40,56,90,0.9)'); bgGrad.addColorStop(1, 'rgba(18,26,46,0.95)'); }
-    ctx.fillStyle = bgGrad;
-    ctx.beginPath(); ctx.arc(btn.cx, btn.cy, r, 0, TAU); ctx.fill();
-    // 边框
-    ctx.strokeStyle = enabled ? (isUlt ? 'rgba(255,216,107,0.6)' : 'rgba(77,208,255,0.45)') : 'rgba(255,255,255,0.1)';
-    ctx.lineWidth = isUlt ? 2 : 1.5;
-    ctx.beginPath(); ctx.arc(btn.cx, btn.cy, r, 0, TAU); ctx.stroke();
-    // 图标
-    ctx.globalAlpha = enabled ? 1 : 0.35;
-    ctx.font = '24px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = iconColor;
-    ctx.shadowColor = iconColor; ctx.shadowBlur = enabled && cd <= 0 ? (isUlt ? 14 : 8) : 0;
-    ctx.fillText(btn.icon, btn.cx, btn.cy - 2);
-    ctx.shadowBlur = 0;
-    // 名称
-    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(200,208,220,0.7)';
-    ctx.fillText(btn.name, btn.cx, btn.cy + r - 10);
-    ctx.globalAlpha = 1;
-    // 冷却遮罩
+    const cx = btn.cx, cy = btn.cy;
+
+    if (isUlt) {
+      // ===== 终极技能：六角形 + 金色光环 + 旋转外环 + 脉冲 =====
+      // 外层旋转光环（就绪时显示）
+      if (ready) {
+        ctx.save();
+        ctx.globalAlpha = 0.35 + pulseT * 0.4;
+        ctx.strokeStyle = '#ffb02e'; ctx.lineWidth = 2;
+        hexPath(cx, cy, r + 6, rot);
+        ctx.stroke();
+        ctx.globalAlpha = 0.2 + pulseT * 0.3;
+        hexPath(cx, cy, r + 11, -rot * 0.7);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // 底座阴影
+      ctx.save();
+      ctx.shadowColor = ready ? '#ffb02e' : '#000'; ctx.shadowBlur = ready ? 18 + pulseT * 12 : 6;
+      // 六角形背景（金色径向渐变）
+      const ug = ctx.createRadialGradient(cx, cy - r * 0.3, r * 0.2, cx, cy, r);
+      if (enabled) { ug.addColorStop(0, '#3a2a08'); ug.addColorStop(0.6, '#1f1404'); ug.addColorStop(1, '#0a0700'); }
+      else { ug.addColorStop(0, '#1a1a1a'); ug.addColorStop(1, '#0a0a0a'); }
+      ctx.fillStyle = ug;
+      hexPath(cx, cy, r, Math.PI / 6); ctx.fill();
+      ctx.restore();
+      // 金色双层边框
+      ctx.strokeStyle = enabled ? '#ffd86b' : '#3a3a3a'; ctx.lineWidth = 2.5;
+      hexPath(cx, cy, r, Math.PI / 6); ctx.stroke();
+      ctx.strokeStyle = enabled ? 'rgba(255,176,46,0.5)' : 'rgba(80,80,80,0.3)'; ctx.lineWidth = 1;
+      hexPath(cx, cy, r - 4, Math.PI / 6); ctx.stroke();
+      // 就绪时内层光晕
+      if (ready) {
+        const ig = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.7);
+        ig.addColorStop(0, `rgba(255,200,80,${0.25 + pulseT * 0.2})`);
+        ig.addColorStop(1, 'rgba(255,200,80,0)');
+        ctx.fillStyle = ig;
+        hexPath(cx, cy, r - 3, Math.PI / 6); ctx.fill();
+      }
+      // 图标
+      ctx.globalAlpha = enabled ? 1 : 0.4;
+      ctx.font = `bold ${Math.round(r * 0.85)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = iconColor;
+      ctx.shadowColor = iconColor; ctx.shadowBlur = ready ? 12 + pulseT * 8 : 0;
+      ctx.fillText(icon, cx, cy - 2);
+      ctx.shadowBlur = 0;
+      // "大招"标签
+      ctx.font = 'bold 9px sans-serif'; ctx.fillStyle = ready ? '#ffd86b' : 'rgba(180,160,120,0.5)';
+      ctx.fillText('大招', cx, cy + r - 8);
+      ctx.globalAlpha = 1;
+    } else {
+      // ===== 普通技能：圆形 + 蓝青色调 + 简洁科技感 =====
+      // 就绪外光环
+      if (ready) {
+        ctx.save();
+        ctx.globalAlpha = 0.3 + pulseT * 0.25;
+        ctx.strokeStyle = iconColor; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, TAU); ctx.stroke();
+        ctx.restore();
+      }
+      // 圆形背景（深蓝径向渐变）
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
+      const bg = ctx.createRadialGradient(cx, cy - r * 0.3, r * 0.2, cx, cy, r);
+      if (enabled) { bg.addColorStop(0, 'rgba(40,60,96,0.95)'); bg.addColorStop(0.7, 'rgba(18,28,52,0.95)'); bg.addColorStop(1, 'rgba(8,14,28,0.95)'); }
+      else { bg.addColorStop(0, 'rgba(30,32,40,0.9)'); bg.addColorStop(1, 'rgba(10,12,18,0.9)'); }
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill();
+      ctx.restore();
+      // 双层边框（外冷蓝、内细线）
+      ctx.strokeStyle = enabled ? iconColor : 'rgba(90,100,120,0.4)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = enabled ? 'rgba(138,255,214,0.25)' : 'rgba(60,70,90,0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r - 3, 0, TAU); ctx.stroke();
+      // 就绪时内层淡光
+      if (ready) {
+        const ig = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.65);
+        ig.addColorStop(0, `${iconColor}33`);
+        ig.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = ig;
+        ctx.beginPath(); ctx.arc(cx, cy, r - 2, 0, TAU); ctx.fill();
+      }
+      // 图标
+      ctx.globalAlpha = enabled ? 1 : 0.4;
+      ctx.font = `bold ${Math.round(r * 0.78)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = iconColor;
+      ctx.shadowColor = iconColor; ctx.shadowBlur = ready ? 8 + pulseT * 4 : 0;
+      ctx.fillText(icon, cx, cy - 2);
+      ctx.shadowBlur = 0;
+      // 名称
+      ctx.font = '9px sans-serif'; ctx.fillStyle = enabled ? 'rgba(200,215,235,0.85)' : 'rgba(120,130,150,0.5)';
+      ctx.fillText(btn.name, cx, cy + r - 8);
+      ctx.globalAlpha = 1;
+    }
+
+    // 冷却遮罩（通用：扇形逆时针覆盖 + 倒计时数字）
     if (cd > 0 && enabled) {
       const ratio = cd / cdMax;
-      ctx.fillStyle = 'rgba(5,8,16,0.72)';
+      ctx.save();
+      ctx.fillStyle = 'rgba(5,8,16,0.78)';
       ctx.beginPath();
-      ctx.moveTo(btn.cx, btn.cy);
-      ctx.arc(btn.cx, btn.cy, r, -Math.PI / 2, -Math.PI / 2 + TAU * ratio, false);
+      ctx.moveTo(cx, cy);
+      if (isUlt) {
+        // 六角形冷却遮罩用扇形近似
+        ctx.arc(cx, cy, r - 2, -Math.PI / 2, -Math.PI / 2 + TAU * ratio, false);
+      } else {
+        ctx.arc(cx, cy, r - 2, -Math.PI / 2, -Math.PI / 2 + TAU * ratio, false);
+      }
       ctx.closePath(); ctx.fill();
-      ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#fff';
-      ctx.fillText(cd.toFixed(1), btn.cx, btn.cy);
+      ctx.restore();
+      ctx.font = `bold ${Math.round(r * 0.5)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
+      ctx.fillText(cd.toFixed(1), cx, cy);
+      ctx.shadowBlur = 0;
     }
   }
 }
@@ -1028,6 +1262,74 @@ function drawBossWarn() {
   ctx.font = '14px sans-serif'; ctx.fillStyle = '#ff6b8a';
   ctx.fillText(bossWarnUlt ? '终极Boss · 全力以赴！' : '精英Boss来袭 · 小心应对', W / 2, H * 0.42 + 28);
   ctx.restore();
+}
+
+// 随机事件横幅：顶部居中卡片（区别于Boss全屏预警）
+function drawEventBanner() {
+  if (eventBannerTimer <= 0 || !activeEvent) return;
+  const t = eventBannerTimer / 3.0; // 1→0
+  const pulse = 0.5 + 0.5 * Math.sin(time * 8);
+  const ev = activeEvent;
+  const bw = Math.min(W * 0.7, 320), bh = 54;
+  const bx = (W - bw) / 2, by = HUD_TOP + 38;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, t * 2.2);
+  // 背景
+  ctx.fillStyle = 'rgba(8,10,20,0.88)';
+  roundRect(ctx, bx, by, bw, bh, 8); ctx.fill();
+  // 左侧色条
+  ctx.fillStyle = ev.color;
+  ctx.shadowColor = ev.color; ctx.shadowBlur = 10 + pulse * 8;
+  ctx.fillRect(bx, by, 5, bh);
+  ctx.shadowBlur = 0;
+  // 边框
+  ctx.strokeStyle = ev.color; ctx.globalAlpha = Math.min(1, t * 2.2) * (0.6 + pulse * 0.3);
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, bx, by, bw, bh, 8); ctx.stroke();
+  ctx.globalAlpha = Math.min(1, t * 2.2);
+  // 图标
+  ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = ev.color; ctx.shadowColor = ev.color; ctx.shadowBlur = 8;
+  ctx.fillText(ev.icon, bx + 16, by + bh / 2);
+  ctx.shadowBlur = 0;
+  // 标题
+  ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#fff';
+  ctx.fillText(ev.name, bx + 44, by + bh / 2 - 9);
+  // 描述
+  ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(200,210,225,0.85)';
+  ctx.fillText(ev.desc, bx + 44, by + bh / 2 + 9);
+  // 倒计时（持续时间类事件）
+  if (ev.max > 0) {
+    const remain = Math.max(0, ev.max - ev.dur);
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillStyle = ev.color;
+    ctx.fillText(remain.toFixed(1) + 's', bx + bw - 12, by + bh / 2);
+  }
+  ctx.restore();
+}
+
+// 持续性Buff指示器（左下角小图标条）
+function drawBuffIndicators() {
+  const buffs = [];
+  if (frenzyBuff > 0) buffs.push({ name: '狂暴', t: frenzyBuff, color: '#ff3a8a', icon: '⚡' });
+  if (shieldBuff > 0) buffs.push({ name: '护盾', t: shieldBuff, color: '#5cffb0', icon: '🛡' });
+  if (doubleXpBuff > 0) buffs.push({ name: '双倍经验', t: doubleXpBuff, color: '#8affd6', icon: '✦' });
+  if (buffs.length === 0) return;
+  const ix = SAFE_L + 4, iy = H - SAFE_B - 40;
+  for (let i = 0; i < buffs.length; i++) {
+    const b = buffs[i];
+    const x = ix + i * 56, y = iy;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,10,20,0.7)';
+    ctx.strokeStyle = b.color; ctx.lineWidth = 1.2;
+    roundRect(ctx, x, y, 52, 22, 4); ctx.fill(); ctx.stroke();
+    ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = b.color;
+    ctx.fillText(b.icon, x + 5, y + 11);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif';
+    ctx.fillText(b.t.toFixed(1) + 's', x + 20, y + 11);
+    ctx.restore();
+  }
 }
 
 function drawHint() {
@@ -1288,9 +1590,11 @@ function drawUI() {
     drawSkillButtons();
     drawMinimap();
     drawHint();
+    drawBuffIndicators();
   }
   if (state === STATE.LEVELUP) drawLevelUpScreen();
   if (bossWarnTimer > 0 && state === STATE.PLAY) drawBossWarn();
+  if (eventBannerTimer > 0 && state === STATE.PLAY) drawEventBanner();
   if (state === STATE.OVER) drawOverScreen();
   if (state === STATE.PAUSE) drawPauseScreen();
 }
@@ -1385,6 +1689,9 @@ function resetGame() {
   unlockedSkills = []; // 重置已解锁技能列表
   ultUnlocked = false; // 终极技能重置为未解锁
   firstBookGuaranteed = false; // 首个精英必掉技能书（保证早期拿到第一个技能）
+  // 重置随机事件状态
+  eventTimer = rand(45, 60); activeEvent = null; eventBannerTimer = 0;
+  frenzyBuff = 0; shieldBuff = 0; doubleXpBuff = 0;
   enemies = []; bullets = []; particles = []; gems = []; pickups = []; floats = [];
   chains = []; lasers = []; boomerangs = []; frosts = []; eqDrops = []; boss = null;
   time = 0; spawnTimer = 0; pickupTimer = 8; wave = 1; cam.shake = 0; nextBossStageIdx = 0;
@@ -1447,7 +1754,14 @@ function spawnEnemy(forceType) {
   }
   const t = ENEMY_TYPES[type]; const hpScale = 1 + time / 60, dmgScale = 1 + time / 120;
   const elite = Math.floor(time / 30) > Math.floor((time - 1) / 30) && time > 20;
+  spawnEnemyAt(x, y, type, elite);
+}
+// 在指定坐标生成敌人（用于随机事件：精英潮等）
+function spawnEnemyAt(x, y, type, forceElite) {
+  const t = ENEMY_TYPES[type]; const hpScale = 1 + time / 60, dmgScale = 1 + time / 120;
+  const elite = !!forceElite;
   const eliteMult = elite ? 2.5 : 1;
+  x = clamp(x, 20, MAP_W - 20); y = clamp(y, 20, MAP_H - 20);
   enemies.push({ type, x, y, r: t.r * eliteMult, hp: t.hp * hpScale * eliteMult, maxHp: t.hp * hpScale * eliteMult,
     speed: t.speed, dmg: t.dmg * dmgScale, xp: t.xp * eliteMult,
     color: t.color, glow: t.glow, shape: t.shape, ai: t.ai, hitFlash: 0, slow: 0, spin: rand(0, TAU), elite,
@@ -1482,7 +1796,7 @@ function spawnBoss(stage) {
   if (stage.kind === 'ultimate') flashScreen = 0.2;
 }
 function damageBoss(dmg) {
-  boss.hp -= dmg * synergies.allDmgMult; boss.hitFlash = 0.1;
+  boss.hp -= dmg * synergies.allDmgMult * (frenzyBuff > 0 ? 1.5 : 1); boss.hitFlash = 0.1;
   spawnParticles(boss.x + rand(-10, 10), boss.y + rand(-10, 10), '#ff4d6d', 3, 80);
   if (boss.hp <= 0) killBoss();
 }
@@ -1616,6 +1930,7 @@ function update(dt) {
   if (combo.timer > 0) { combo.timer -= dt; if (combo.timer <= 0) combo.count = 0; }
   if (flashScreen > 0) flashScreen -= dt * 2;
   time += dt;
+  updateRandomEvents(dt);
 
   // 移动
   let mx = joystick.vec.x, my = joystick.vec.y;
@@ -1983,8 +2298,9 @@ function pointToSegDist(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 function damageEnemy(e, dmg, idx, showNum) {
-  e.hp -= dmg * synergies.allDmgMult; e.hitFlash = 0.1; Audio.hit();
-  if (showNum !== false) floatText(e.x, e.y - e.r - 4, Math.round(dmg), '#fff');
+  const finalDmg = dmg * synergies.allDmgMult * (frenzyBuff > 0 ? 1.5 : 1);
+  e.hp -= finalDmg; e.hitFlash = 0.1; Audio.hit();
+  if (showNum !== false) floatText(e.x, e.y - e.r - 4, Math.round(finalDmg), frenzyBuff > 0 ? '#ff3a8a' : '#fff');
   if (e.hp <= 0) killEnemy(e, idx);
 }
 function killEnemy(e, idx) {
@@ -2050,6 +2366,15 @@ function useSkillBook() {
   }
 }
 // 解锁小技能并加入技能槽
+// 技能随机变异前缀：解锁时有25%概率获得强化版（额外属性）
+const SKILL_VARIANTS = {
+  orbit:     [{ tag: '炽焰', dmgMult: 1.5, color: '#ff6a3a' }, { tag: '寒霜', extra: 'slow', color: '#5ec8ff' }],
+  aura:      [{ tag: '剧毒', dpsMult: 1.6, color: '#7fff5a' }, { tag: '扩域', radAdd: 30, color: '#c08bff' }],
+  chain:     [{ tag: '雷暴', dmgMult: 1.4, color: '#ffe23a' }, { tag: '链锁', targetsAdd: 2, color: '#5cffb0' }],
+  frost:     [{ tag: '极寒', dmgMult: 1.5, color: '#5ec8ff' }, { tag: '冰封', slowAdd: 2, color: '#9fd6ff' }],
+  laser:     [{ tag: '炽光', dpsMult: 1.5, color: '#ff5c8a' }, { tag: '宽束', widthAdd: 8, color: '#ffd86b' }],
+  boomerang: [{ tag: '锋刃', dmgMult: 1.5, color: '#ffd86b' }, { tag: '双飞', countAdd: 1, color: '#5cffb0' }],
+};
 function unlockSmallSkill(name) {
   if (unlockedSkills.includes(name) || unlockedSkills.length >= MAX_SKILLS) return;
   const sk = skills[name];
@@ -2060,10 +2385,25 @@ function unlockSmallSkill(name) {
     case 'frost': sk.radius = 110; sk.timer = 2; break;
   }
   sk.lvl = 1;
+  // 随机变异：25%概率获得强化前缀
+  let variantTag = '';
+  const variants = SKILL_VARIANTS[name];
+  if (variants && Math.random() < 0.25) {
+    const v = variants[randi(0, variants.length - 1)];
+    variantTag = v.tag;
+    sk.variant = v;
+    if (v.dmgMult) sk.dmg *= v.dmgMult;
+    if (v.dpsMult) sk.dps *= v.dpsMult;
+    if (v.radAdd) sk.radius += v.radAdd;
+    if (v.targetsAdd) sk.targets += v.targetsAdd;
+    if (v.slowAdd) sk.slowDur += v.slowAdd;
+    if (v.widthAdd) sk.width += v.widthAdd;
+    if (v.countAdd) sk.count += v.countAdd;
+  }
   unlockedSkills.push(name);
   applyEquipStats();
-  Audio.equip(); spawnParticles(player.x, player.y, '#b066ff', 30, 260);
-  floatText(player.x, player.y - 50, '🔓 新技能：' + sk.name, '#b066ff');
+  Audio.equip(); spawnParticles(player.x, player.y, variantTag ? '#ffd86b' : '#b066ff', 30, 260);
+  floatText(player.x, player.y - 50, '🔓 ' + (variantTag ? '【' + variantTag + '】' : '新技能：') + sk.name, variantTag ? '#ffd86b' : '#b066ff');
 }
 // 解锁终极技能（CD长、伤害高）
 function unlockUlt() {
@@ -2076,7 +2416,7 @@ function unlockUlt() {
   cam.shake = 8;
 }
 function gainXp(v) {
-  player.xp += v * player.xpMult;
+  player.xp += v * player.xpMult * (doubleXpBuff > 0 ? 2 : 1);
   while (player.xp >= player.xpNext) {
     player.xp -= player.xpNext; player.level++;
     player.xpNext = Math.floor(5 + player.level * 3 + player.level * player.level * 0.5);
@@ -2221,6 +2561,15 @@ function drawPlayer() {
   if (skills.aura.radius > 0) { ctx.beginPath(); ctx.arc(player.x, player.y, skills.aura.radius, 0, TAU);
     ctx.fillStyle = 'rgba(176,102,255,0.10)'; ctx.fill();
     ctx.strokeStyle = 'rgba(176,102,255,0.35)'; ctx.lineWidth = 1.5; ctx.stroke(); }
+  // 护盾庇护光环（事件buff）
+  if (shieldBuff > 0) {
+    const sp = 0.5 + 0.5 * Math.sin(time * 8);
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8 + sp * 3, 0, TAU);
+    ctx.strokeStyle = `rgba(92,255,176,${0.5 + sp * 0.4})`; ctx.lineWidth = 2.5;
+    ctx.shadowColor = '#5cffb0'; ctx.shadowBlur = 14; ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 14, 0, TAU);
+    ctx.strokeStyle = `rgba(92,255,176,${0.15 + sp * 0.15})`; ctx.lineWidth = 1; ctx.stroke();
+  }
   ctx.beginPath(); ctx.arc(player.x, player.y, player.pickupRange, 0, TAU);
   ctx.strokeStyle = 'rgba(138,255,214,0.06)'; ctx.stroke();
   ctx.translate(player.x, player.y);
@@ -2599,6 +2948,13 @@ function drawEqDrop(eq) {
   if (Math.sin(eq.pulse * 4) > 0.7) { ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.beginPath(); ctx.arc(-s * 0.3, -s * 0.3, s * 0.4, 0, TAU); ctx.fill(); }
   ctx.restore();
+  // 前缀标识（有附魔时在装备上方显示金色小标）
+  if (eq.prefix) {
+    ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#ffd86b'; ctx.shadowColor = '#ffd86b'; ctx.shadowBlur = 4;
+    ctx.fillText('【' + eq.prefix + '】', eq.x, eq.y - s - 6);
+    ctx.shadowBlur = 0;
+  }
   ctx.globalAlpha = 1;
 }
 function drawParticles() {
