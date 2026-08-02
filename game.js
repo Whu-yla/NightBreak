@@ -141,8 +141,12 @@ const SPRITE_LIST = [
 let spritesReady = 0;
 const spritesTotal = SPRITE_LIST.length;
 // 把 JPG 白底抠除为透明，存到离屏 canvas（bg 背景图不抠）
+// 算法：三步法
+//   1) 洪水填充：从四边向内扩散，只标记与边缘连通的"真背景"（防止主体内部白色被误抠）
+//   2) 光晕清理：标记背景外缘 1~2 圈的"亮且低饱和"像素为光晕白边，淡化并去污染
+//      —— 这一步解决边缘抗锯齿半白像素残留导致的白边光晕
+//   3) 抗锯齿去污染：对半透明且紧邻背景的像素去除白色分量
 function processSprite(key, img) {
-  // 背景图保留原样（满屏铺底，不需要透明）
   if (key === 'bg') { SPRITES[key] = img; return; }
   const w = img.width, h = img.height;
   const c = wx.createCanvas(); c.width = w; c.height = h;
@@ -151,34 +155,115 @@ function processSprite(key, img) {
   let data;
   try { data = cx.getImageData(0, 0, w, h); } catch (e) { SPRITES[key] = img; return; }
   const d = data.data;
-  // 采样四角作为背景色参考（JPG 白底通常不是纯白，有压缩噪点）
-  const cornerIdx = [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]];
-  let br = 0, bg = 0, bb = 0;
-  for (const [px, py] of cornerIdx) { const i = (py * w + px) * 4; br += d[i]; bg += d[i + 1]; bb += d[i + 2]; }
-  br /= 4; bg /= 4; bb /= 4;
-  const bgLight = (Math.max(br, bg, bb) + Math.min(br, bg, bb)) / 2;
-  // 亮度阈值：取采样背景亮度 - 20，但不低于 175（避免误抠明亮主体）
-  const threshL = Math.max(175, bgLight - 20);
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i], g = d[i + 1], b = d[i + 2];
+
+  // 取像素亮度/饱和度信息
+  function bgScore(idx) {
+    const r = d[idx], g = d[idx + 1], b = d[idx + 2];
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    const sat = mx - mn;            // 饱和度
-    const light = (mx + mn) / 2;    // 亮度
-    if (light > threshL && sat < 45) {
-      // 越白越透明：亮度+饱和度联合判定，平滑过渡
-      const lightT = clamp((light - threshL) / (255 - threshL), 0, 1);
-      const satT = clamp(1 - sat / 45, 0, 1);
-      const reduce = Math.min(1, lightT * 1.4 + satT * 0.4);
-      d[i + 3] = Math.max(0, Math.round(d[i + 3] * (1 - reduce)));
-      // 关键：残留半透明像素降低 RGB，避免合成时残留白边光晕（色彩去污染）
-      if (reduce > 0 && reduce < 1) {
-        const keep = 1 - reduce * 0.55;
-        d[i] = Math.round(r * keep);
-        d[i + 1] = Math.round(g * keep);
-        d[i + 2] = Math.round(b * keep);
-      }
+    return { light: (mx + mn) / 2, sat: mx - mn };
+  }
+  // 严格判背景：用于洪水填充传播（避免侵入主体）
+  function isBgLike(idx) { const s = bgScore(idx); return s.light > 165 && s.sat < 50; }
+
+  // ---- 第1步：洪水填充标记真背景 ----
+  const visited = new Uint8Array(w * h);
+  const queue = [];
+  for (let x = 0; x < w; x++) {
+    const i0 = (0 * w + x) * 4, i1 = ((h - 1) * w + x) * 4;
+    if (isBgLike(i0) && !visited[x]) { visited[x] = 1; queue.push(x); }
+    if (isBgLike(i1) && !visited[(h - 1) * w + x]) { visited[(h - 1) * w + x] = 1; queue.push((h - 1) * w + x); }
+  }
+  for (let y = 0; y < h; y++) {
+    const i0 = (y * w + 0) * 4, i1 = (y * w + (w - 1)) * 4;
+    if (isBgLike(i0) && !visited[y * w]) { visited[y * w] = 1; queue.push(y * w); }
+    if (isBgLike(i1) && !visited[y * w + w - 1]) { visited[y * w + w - 1] = 1; queue.push(y * w + w - 1); }
+  }
+  while (queue.length) {
+    const pos = queue.pop();
+    const px = pos % w, py = (pos - px) / w;
+    if (px > 0) { const np = pos - 1; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
+    if (px < w - 1) { const np = pos + 1; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
+    if (py > 0) { const np = pos - w; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
+    if (py < h - 1) { const np = pos + w; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
+  }
+  // 真背景像素：按白度淡化 alpha
+  for (let pos = 0; pos < w * h; pos++) {
+    if (!visited[pos]) continue;
+    const idx = pos * 4;
+    const s = bgScore(idx);
+    const lightT = clamp((s.light - 165) / (255 - 165), 0, 1);
+    const satT = clamp(1 - s.sat / 50, 0, 1);
+    const alpha = 1 - Math.min(1, lightT * 1.3 + satT * 0.3);
+    d[idx + 3] = Math.round(d[idx + 3] * alpha);
+  }
+
+  // ---- 第2步：光晕清理（关键）----
+  // 标记背景外缘 1~2 圈"亮且低饱和"的非背景像素为光晕，淡化并去污染
+  // 用 8 邻域判定紧邻背景，确保斜向白边也被捕获
+  const halo = new Uint8Array(w * h);
+  const ringQ = [];
+  function isHaloLike(idx) { const s = bgScore(idx); return s.light > 115 && s.sat < 95; }
+  for (let pos = 0; pos < w * h; pos++) {
+    if (visited[pos]) continue;
+    if (!isHaloLike(pos * 4)) continue;
+    const px = pos % w, py = (pos - px) / w;
+    let adjBg = false;
+    if (px > 0 && visited[pos - 1]) adjBg = true;
+    else if (px < w - 1 && visited[pos + 1]) adjBg = true;
+    else if (py > 0 && visited[pos - w]) adjBg = true;
+    else if (py < h - 1 && visited[pos + w]) adjBg = true;
+    else if (px > 0 && py > 0 && visited[pos - w - 1]) adjBg = true;
+    else if (px < w - 1 && py > 0 && visited[pos - w + 1]) adjBg = true;
+    else if (px > 0 && py < h - 1 && visited[pos + w - 1]) adjBg = true;
+    else if (px < w - 1 && py < h - 1 && visited[pos + w + 1]) adjBg = true;
+    if (adjBg) { halo[pos] = 1; ringQ.push(pos); }
+  }
+  // 第二圈：紧邻第一圈的光晕像素（4邻域即可，避免过度侵蚀主体）
+  while (ringQ.length) {
+    const pos = ringQ.pop();
+    const px = pos % w, py = (pos - px) / w;
+    if (px > 0) { const np = pos - 1; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
+    if (px < w - 1) { const np = pos + 1; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
+    if (py > 0) { const np = pos - w; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
+    if (py < h - 1) { const np = pos + w; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
+  }
+  // 光晕像素：第一圈强淡化，第二圈弱淡化，并去白色污染
+  for (let pos = 0; pos < w * h; pos++) {
+    const hl = halo[pos];
+    if (hl === 0) continue;
+    const idx = pos * 4;
+    const s = bgScore(idx);
+    const lightT = clamp((s.light - 115) / (255 - 115), 0, 1);
+    const satT = clamp(1 - s.sat / 95, 0, 1);
+    const whiteScore = clamp(lightT * 0.8 + satT * 0.4, 0, 1);
+    const fade = hl === 1 ? 0.9 : 0.55;
+    d[idx + 3] = Math.round(d[idx + 3] * (1 - whiteScore * fade));
+    const keep = 1 - whiteScore * (hl === 1 ? 0.7 : 0.4);
+    d[idx] = Math.round(d[idx] * keep);
+    d[idx + 1] = Math.round(d[idx + 1] * keep);
+    d[idx + 2] = Math.round(d[idx + 2] * keep);
+  }
+
+  // ---- 第3步：抗锯齿半透明像素去污染 ----
+  for (let pos = 0; pos < w * h; pos++) {
+    const idx = pos * 4;
+    if (d[idx + 3] === 0 || d[idx + 3] === 255) continue;
+    const px = pos % w, py = (pos - px) / w;
+    let hasBgNeighbor = false;
+    if (px > 0 && visited[pos - 1]) hasBgNeighbor = true;
+    if (px < w - 1 && visited[pos + 1]) hasBgNeighbor = true;
+    if (py > 0 && visited[pos - w]) hasBgNeighbor = true;
+    if (py < h - 1 && visited[pos + w]) hasBgNeighbor = true;
+    if (hasBgNeighbor) {
+      const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+      const factor = d[idx + 3] / 255;
+      const decontam = 0.4 * (1 - factor);
+      d[idx] = Math.round(r * (1 - decontam));
+      d[idx + 1] = Math.round(g * (1 - decontam));
+      d[idx + 2] = Math.round(b * (1 - decontam));
     }
   }
+
   cx.putImageData(data, 0, 0);
   SPRITES[key] = c;
 }
@@ -252,15 +337,35 @@ const player = {
 };
 
 const skills = {
-  bullet: { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12, btnCd: 0, btnCdMax: 3.0 },
-  orbit: { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, burstCd: 0, burstCdMax: 4.5 },
-  aura: { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, novaCd: 0, novaCdMax: 6.0 },
-  chain: { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2 },
-  frost: { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3 },
-  laser: { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0 },
-  boomerang: { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320 },
-  ult: { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 20, cd: 0, dmg: 60, radius: 160 },
+  bullet: { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12 },
+  orbit: { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, btnCd: 0, btnCdMax: 5.0 },
+  aura: { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, btnCd: 0, btnCdMax: 6.0 },
+  chain: { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2, btnCd: 0, btnCdMax: 8.0 },
+  frost: { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3, btnCd: 0, btnCdMax: 10.0 },
+  laser: { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0, empower: 0, btnCd: 0, btnCdMax: 12.0 },
+  boomerang: { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320, btnCd: 0, btnCdMax: 8.0 },
+  ult: { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 45, cd: 0, dmg: 200, radius: 260 },
 };
+
+// 技能系统：3个小技能槽 + 1终极技能槽
+const MAX_SKILLS = 3;
+// 可解锁的小技能候选（不含 bullet 基础攻击和 ult 终极技能）
+const SKILL_CANDIDATES = ['orbit', 'aura', 'chain', 'frost', 'laser', 'boomerang'];
+// 已解锁技能列表（按解锁顺序），最多 MAX_SKILLS 个
+let unlockedSkills = [];
+// 终极技能是否解锁（出生未解锁，需通过技能书解锁）
+let ultUnlocked = false;
+// 首个精英怪是否已掉落技能书（保证早期必得一个技能）
+let firstBookGuaranteed = false;
+// 获取当前3个小技能槽（动态填充）
+function getSkillSlots() {
+  return unlockedSkills.slice(0, MAX_SKILLS);
+}
+// 判断某技能是否已解锁（含终极）
+function isSkillUnlocked(name) {
+  if (name === 'ult') return ultUnlocked;
+  return unlockedSkills.includes(name);
+}
 
 // 装备系统
 const EQUIP_SLOTS = ['weapon', 'armor', 'boots', 'amulet'];
@@ -311,7 +416,7 @@ function applyEquipStats() {
   skills.frost.dmg = 20 * bonusAllDmg;
   skills.laser.dps = 55 * bonusAllDmg;
   skills.boomerang.dmg = 16 * bonusAllDmg;
-  skills.ult.dmg = 60 * bonusAllDmg;
+  skills.ult.dmg = (200 + (skills.ult.lvl || 0) * 40) * bonusAllDmg;
   skills.chain.cd = 2.2; skills.frost.cd = 7.0; skills.boomerang.cd = 1.6;
   computeSynergies();
   player.maxHp += synergies.maxHpBonus;
@@ -455,6 +560,7 @@ const joystick = {
 function isInJoyZone(x, y) { return x < W * 0.45 && y > H * 0.35; }
 
 // 技能按钮布局（右下方 2×2 网格），考虑 safeArea
+// 3个小技能槽（左上、右上、左下）+ 1终极技能槽（右下），动态填充
 const SK_R = Math.min(W * 0.085, 34);
 const SK_GAP = SK_R * 0.5;
 const SK_M = 16;
@@ -462,12 +568,29 @@ const SK_RIGHT_X = W - SK_R - SK_M - SAFE_R;
 const SK_LEFT_X = SK_RIGHT_X - SK_R * 2 - SK_GAP;
 const SK_BOTTOM_Y = H - SK_R - SK_M - 8 - SAFE_B;
 const SK_TOP_Y = SK_BOTTOM_Y - SK_R * 2 - SK_GAP;
-const skillBtns = {
-  bullet: { cx: SK_LEFT_X, cy: SK_TOP_Y, r: SK_R, icon: '✦', name: '弹幕', key: '1' },
-  orbit: { cx: SK_RIGHT_X, cy: SK_TOP_Y, r: SK_R, icon: '◉', name: '光球', key: '2' },
-  aura: { cx: SK_LEFT_X, cy: SK_BOTTOM_Y, r: SK_R, icon: '◎', name: '光环', key: '3' },
-  ult: { cx: SK_RIGHT_X, cy: SK_BOTTOM_Y, r: SK_R, icon: '✺', name: '爆发', key: 'R' },
-};
+// 4个固定位置：3个小技能槽 + 1终极槽
+const SK_SLOTS = [
+  { cx: SK_LEFT_X, cy: SK_TOP_Y, r: SK_R },    // 槽位1
+  { cx: SK_RIGHT_X, cy: SK_TOP_Y, r: SK_R },   // 槽位2
+  { cx: SK_LEFT_X, cy: SK_BOTTOM_Y, r: SK_R }, // 槽位3
+];
+const ULT_SLOT = { cx: SK_RIGHT_X, cy: SK_BOTTOM_Y, r: SK_R };
+// 获取当前帧的技能按钮（动态：3个小技能 + 1终极）
+function getSkillButtons() {
+  const btns = {};
+  const slots = getSkillSlots();
+  for (let i = 0; i < SK_SLOTS.length; i++) {
+    const pos = SK_SLOTS[i];
+    if (i < slots.length) {
+      const sk = skills[slots[i]];
+      btns[slots[i]] = { ...pos, icon: sk.icon, name: sk.name.slice(0, 2), enabled: true };
+    } else {
+      btns['_empty' + i] = { ...pos, icon: '?', name: '空', enabled: false };
+    }
+  }
+  btns['ult'] = { ...ULT_SLOT, icon: ultUnlocked ? skills.ult.icon : '🔒', name: '终极', enabled: ultUnlocked };
+  return btns;
+}
 
 // 顶部按钮
 const TOP_R = 15;
@@ -520,8 +643,9 @@ function handleTouchStart(x, y, id) {
   }
   // 游戏中
   if (state === STATE.PLAY) {
-    // 技能按钮
-    for (const [name, btn] of Object.entries(skillBtns)) {
+    // 技能按钮（动态获取）
+    const skillBtnsNow = getSkillButtons();
+    for (const [name, btn] of Object.entries(skillBtnsNow)) {
       if (ptInCircle(x, y, btn.cx, btn.cy, btn.r)) { tryCastSkill(name); return; }
     }
     // 顶部按钮
@@ -792,31 +916,34 @@ function drawJoystick() {
 }
 
 function drawSkillButtons() {
-  const map = {
-    bullet: { cd: skills.bullet.btnCd, max: skills.bullet.btnCdMax, enabled: true, cls: 's-bullet' },
-    orbit: { cd: skills.orbit.burstCd, max: skills.orbit.burstCdMax, enabled: skills.orbit.lvl > 0, cls: 's-orbit' },
-    aura: { cd: skills.aura.novaCd, max: skills.aura.novaCdMax, enabled: skills.aura.lvl > 0, cls: 's-aura' },
-    ult: { cd: skills.ult.cd, max: skills.ult.cdMax, enabled: true, cls: 's-ult' },
-  };
-  const iconColors = { bullet: '#8affd6', orbit: '#bdffe6', aura: '#d9a8ff', ult: '#ffd86b' };
-  for (const [name, btn] of Object.entries(skillBtns)) {
-    const info = map[name];
+  // 动态获取技能按钮（3个小技能 + 1终极）
+  const btns = getSkillButtons();
+  // 每个技能的CD/颜色信息
+  const skillColors = { orbit: '#bdffe6', aura: '#d9a8ff', chain: '#ffea00', frost: '#9fd6ff', laser: '#ff4d8a', boomerang: '#ffe27a', ult: '#ffd86b' };
+  for (const [name, btn] of Object.entries(btns)) {
+    const isEmpty = name.startsWith('_empty');
+    const isUlt = name === 'ult';
+    const sk = isEmpty ? null : skills[name];
+    const cd = isEmpty ? 0 : (isUlt ? sk.cd : (sk.btnCd || 0));
+    const cdMax = isEmpty ? 1 : (isUlt ? sk.cdMax : (sk.btnCdMax || 1));
+    const enabled = isEmpty ? false : (isUlt ? ultUnlocked : sk.lvl > 0);
+    const iconColor = isEmpty ? '#5a6478' : (skillColors[name] || '#8affd6');
     const r = btn.r;
     // 按钮背景
     const bgGrad = ctx.createLinearGradient(btn.cx - r, btn.cy - r, btn.cx + r, btn.cy + r);
-    bgGrad.addColorStop(0, 'rgba(40,56,90,0.9)');
-    bgGrad.addColorStop(1, 'rgba(18,26,46,0.95)');
+    if (isUlt) { bgGrad.addColorStop(0, 'rgba(80,60,20,0.95)'); bgGrad.addColorStop(1, 'rgba(40,30,10,0.95)'); }
+    else { bgGrad.addColorStop(0, 'rgba(40,56,90,0.9)'); bgGrad.addColorStop(1, 'rgba(18,26,46,0.95)'); }
     ctx.fillStyle = bgGrad;
     ctx.beginPath(); ctx.arc(btn.cx, btn.cy, r, 0, TAU); ctx.fill();
     // 边框
-    ctx.strokeStyle = info.enabled ? 'rgba(77,208,255,0.45)' : 'rgba(255,255,255,0.1)';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = enabled ? (isUlt ? 'rgba(255,216,107,0.6)' : 'rgba(77,208,255,0.45)') : 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = isUlt ? 2 : 1.5;
     ctx.beginPath(); ctx.arc(btn.cx, btn.cy, r, 0, TAU); ctx.stroke();
     // 图标
-    ctx.globalAlpha = info.enabled ? 1 : 0.35;
+    ctx.globalAlpha = enabled ? 1 : 0.35;
     ctx.font = '24px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = iconColors[name];
-    ctx.shadowColor = iconColors[name]; ctx.shadowBlur = info.enabled && info.cd <= 0 ? 8 : 0;
+    ctx.fillStyle = iconColor;
+    ctx.shadowColor = iconColor; ctx.shadowBlur = enabled && cd <= 0 ? (isUlt ? 14 : 8) : 0;
     ctx.fillText(btn.icon, btn.cx, btn.cy - 2);
     ctx.shadowBlur = 0;
     // 名称
@@ -824,21 +951,83 @@ function drawSkillButtons() {
     ctx.fillText(btn.name, btn.cx, btn.cy + r - 10);
     ctx.globalAlpha = 1;
     // 冷却遮罩
-    if (info.cd > 0 && info.enabled) {
-      const ratio = info.cd / info.max;
+    if (cd > 0 && enabled) {
+      const ratio = cd / cdMax;
       ctx.fillStyle = 'rgba(5,8,16,0.72)';
       ctx.beginPath();
       ctx.moveTo(btn.cx, btn.cy);
       ctx.arc(btn.cx, btn.cy, r, -Math.PI / 2, -Math.PI / 2 + TAU * ratio, false);
       ctx.closePath(); ctx.fill();
       ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#fff';
-      ctx.fillText(info.cd.toFixed(1), btn.cx, btn.cy);
+      ctx.fillText(cd.toFixed(1), btn.cx, btn.cy);
     }
-    // 按键提示
-    ctx.font = 'bold 9px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-    ctx.fillText(btn.key, btn.cx + r - 4, btn.cy - r + 3);
   }
+}
+
+// 小地图：右上角显示玩家、陷阱、Boss、敌人方向（9倍地图导航）
+function drawMinimap() {
+  const mw = Math.min(W * 0.16, 110);
+  const mh = mw * (MAP_H / MAP_W);
+  const mx = W - mw - 8 - SAFE_R;
+  const my = HUD_TOP + 8;
+  const sx = mw / MAP_W, sy = mh / MAP_H;
+  // 背景
+  ctx.fillStyle = 'rgba(8,12,24,0.82)';
+  ctx.strokeStyle = 'rgba(77,208,255,0.35)'; ctx.lineWidth = 1.5;
+  roundRect(ctx, mx, my, mw, mh, 6); ctx.fill(); ctx.stroke();
+  // 视野矩形
+  const vx = mx + cam.followX * sx, vy = my + cam.followY * sy;
+  const vw = W * sx, vh = H * sy;
+  ctx.strokeStyle = 'rgba(138,255,214,0.4)'; ctx.lineWidth = 1;
+  ctx.strokeRect(vx, vy, vw, vh);
+  // 陷阱（红色点）
+  for (const tr of traps) {
+    ctx.fillStyle = 'rgba(255,80,110,0.8)';
+    ctx.beginPath(); ctx.arc(mx + tr.x * sx, my + tr.y * sy, 2, 0, TAU); ctx.fill();
+  }
+  // 敌人（橙色小点，只画视野内的）
+  ctx.fillStyle = 'rgba(255,140,80,0.6)';
+  for (const e of enemies) {
+    if (e.x < cam.followX - 100 || e.x > cam.followX + W + 100) continue;
+    if (e.y < cam.followY - 100 || e.y > cam.followY + H + 100) continue;
+    ctx.beginPath(); ctx.arc(mx + e.x * sx, my + e.y * sy, 1, 0, TAU); ctx.fill();
+  }
+  // Boss（大紫点）
+  if (boss) {
+    ctx.fillStyle = '#b066ff'; ctx.shadowColor = '#b066ff'; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.arc(mx + boss.x * sx, my + boss.y * sy, 3, 0, TAU); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  // 玩家（青色亮点）
+  ctx.fillStyle = '#4dd0ff'; ctx.shadowColor = '#4dd0ff'; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(mx + player.x * sx, my + player.y * sy, 2.5, 0, TAU); ctx.fill();
+  ctx.shadowBlur = 0;
+  // 标签
+  ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(138,255,214,0.5)';
+  ctx.fillText('MAP', mx + 4, my + 2);
+}
+
+// Boss降临全屏预警横幅
+function drawBossWarn() {
+  const t = bossWarnTimer / 3.0; // 1→0
+  const pulse = 0.5 + 0.5 * Math.sin(time * 10);
+  // 上下红色警示条
+  ctx.fillStyle = `rgba(255,40,60,${0.15 * t * (0.5 + pulse * 0.5)})`;
+  ctx.fillRect(0, H * 0.30, W, H * 0.18);
+  ctx.fillRect(0, H * 0.52, W, H * 0.18);
+  // 中央文字
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, t * 2);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillStyle = bossWarnColor;
+  ctx.shadowColor = bossWarnColor; ctx.shadowBlur = 20 + pulse * 15;
+  ctx.fillText('⚠ ' + bossWarnName + ' 降临 ⚠', W / 2, H * 0.42);
+  ctx.shadowBlur = 0;
+  ctx.font = '14px sans-serif'; ctx.fillStyle = '#ff6b8a';
+  ctx.fillText(bossWarnUlt ? '终极Boss · 全力以赴！' : '精英Boss来袭 · 小心应对', W / 2, H * 0.42 + 28);
+  ctx.restore();
 }
 
 function drawHint() {
@@ -1097,42 +1286,85 @@ function drawUI() {
   if (state === STATE.PLAY || state === STATE.PAUSE) {
     drawJoystick();
     drawSkillButtons();
+    drawMinimap();
     drawHint();
   }
   if (state === STATE.LEVELUP) drawLevelUpScreen();
+  if (bossWarnTimer > 0 && state === STATE.PLAY) drawBossWarn();
   if (state === STATE.OVER) drawOverScreen();
   if (state === STATE.PAUSE) drawPauseScreen();
 }
 
 // ========== 技能释放 ==========
+// 释放技能（3个小技能各有主动爆发 + 1终极技能）
 function tryCastSkill(name) {
   if (state !== STATE.PLAY) return;
+  if (name.startsWith('_empty')) return;
   const s = skills[name]; if (!s) return;
-  if (name === 'bullet') { if (s.btnCd > 0) return; s.btnCd = s.btnCdMax; castBulletBurst(); }
-  else if (name === 'orbit') { if (s.lvl <= 0) return floatText(player.x, player.y - 28, '未解锁', '#8a93a6'); if (s.burstCd > 0) return; s.burstCd = s.burstCdMax; castOrbitBurst(); }
-  else if (name === 'aura') { if (s.lvl <= 0) return floatText(player.x, player.y - 28, '未解锁', '#8a93a6'); if (s.novaCd > 0) return; s.novaCd = s.novaCdMax; castAuraNova(); }
-  else if (name === 'ult') { if (s.cd > 0) return; s.cd = s.cdMax; castUlt(); }
+  if (name === 'ult') { if (!ultUnlocked) return; if (s.cd > 0) return; s.cd = s.cdMax; castUlt(); return; }
+  // 小技能：需已解锁 + CD就绪
+  if (s.lvl <= 0) return floatText(player.x, player.y - 28, '未解锁', '#8a93a6');
+  if (s.btnCd > 0) return;
+  s.btnCd = s.btnCdMax;
+  if (name === 'orbit') castOrbitBurst();
+  else if (name === 'aura') castAuraNova();
+  else if (name === 'chain') castChainBurst();
+  else if (name === 'frost') castFrostBurst();
+  else if (name === 'laser') castLaserBurst();
+  else if (name === 'boomerang') castBoomerangBurst();
 }
-function castBulletBurst() { const b = skills.bullet; cam.shake = 5;
-  for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; bullets.push({ x: player.x, y: player.y, r: 6, vx: Math.cos(a) * b.speed, vy: Math.sin(a) * b.speed, dmg: b.dmg * 1.4, pierce: Math.max(1, b.pierce + synergies.bulletPierceBonus), hit: new Set(), life: 1.4, color: '#ffe27a' }); }
-  spawnParticles(player.x, player.y, '#ffe27a', 16, 180); floatText(player.x, player.y - 28, '弹幕爆发!', '#ffe27a'); }
 function castOrbitBurst() { const o = skills.orbit; cam.shake = 4;
-  for (let k = 0; k < o.count; k++) { const a = o.angle + (k / o.count) * TAU; const sx = player.x + Math.cos(a) * o.radius, sy = player.y + Math.sin(a) * o.radius;
+  for (let k = 0; k < Math.max(1, o.count); k++) { const a = o.angle + (k / Math.max(1, o.count)) * TAU; const sx = player.x + Math.cos(a) * o.radius, sy = player.y + Math.sin(a) * o.radius;
     for (let i = 0; i < 6; i++) { const aa = (i / 6) * TAU + a * 0.3; bullets.push({ x: sx, y: sy, r: 5, vx: Math.cos(aa) * 380, vy: Math.sin(aa) * 380, dmg: o.dmg * 1.6, pierce: 0, hit: new Set(), life: 1.2, color: '#bdffe6' }); } }
   spawnParticles(player.x, player.y, '#8affd6', 20, 200); floatText(player.x, player.y - 28, '光球散射!', '#8affd6'); }
 function castAuraNova() { const au = skills.aura; cam.shake = 6;
-  const r = au.radius + 40, r2 = r * r;
+  const r = Math.max(80, au.radius + 40), r2 = r * r;
   for (let i = enemies.length - 1; i >= 0; i--) { const e = enemies[i]; if (dist2(e.x, e.y, player.x, player.y) < r2) damageEnemy(e, au.dps * 4, i); }
   if (boss && dist2(boss.x, boss.y, player.x, player.y) < r2) damageBoss(au.dps * 4);
   particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r, life: 0.45, max: 0.45, color: '#c89bff' });
   spawnParticles(player.x, player.y, '#b066ff', 24, 220); floatText(player.x, player.y - 28, '幽冥冲击!', '#c89bff'); }
-function castUlt() { const u = skills.ult; cam.shake = 16; Audio.ult();
+function castChainBurst() { const ch = skills.chain; cam.shake = 5; Audio.chain();
+  // 瞬间对所有可见敌人释放连锁闪电，伤害+50%
+  const hitList = []; let last = { x: player.x, y: player.y };
+  const visible = enemies.filter(e => e.x > cam.followX - 50 && e.x < cam.followX + W + 50 && e.y > cam.followY - 50 && e.y < cam.followY + H + 50);
+  const maxTargets = ch.targets + ch.bounce + 3;
+  for (let i = 0; i < Math.min(maxTargets, visible.length); i++) {
+    let best = null, bestD = Infinity;
+    for (const e of visible) { if (hitList.includes(e)) continue; const dd = dist2(last.x, last.y, e.x, e.y); if (dd < bestD) { bestD = dd; best = e; } }
+    if (!best) break; hitList.push(best); last = best;
+  }
+  for (let i = 0; i < hitList.length; i++) { const tgt = hitList[i]; const dmg = ch.dmg * 1.5 * Math.pow(0.85, i);
+    const idx = enemies.indexOf(tgt); if (idx >= 0) damageEnemy(tgt, dmg, idx); }
+  if (boss) { damageBoss(ch.dmg * 1.5); hitList.push(boss); }
+  const pts = [{ x: player.x, y: player.y }]; for (const t of hitList) pts.push({ x: t.x, y: t.y });
+  chains.push({ pts, life: 0.35, max: 0.35 });
+  spawnParticles(player.x, player.y, '#ffea00', 16, 200); floatText(player.x, player.y - 28, '雷神之怒!', '#ffea00'); }
+function castFrostBurst() { const fr = skills.frost; cam.shake = 6; Audio.frost();
+  const r = Math.max(120, fr.radius + 40), r2 = r * r;
+  for (let i = enemies.length - 1; i >= 0; i--) { const e = enemies[i]; if (dist2(e.x, e.y, player.x, player.y) < r2) { damageEnemy(e, fr.dmg * 1.5, i); e.slow = Math.max(e.slow, fr.slowDur * 1.5); } }
+  if (boss && dist2(boss.x, boss.y, player.x, player.y) < r2) { damageBoss(fr.dmg * 1.5); boss.slow = Math.max(boss.slow || 0, fr.slowDur); }
+  frosts.push({ x: player.x, y: player.y, r0: 10, r, life: 0.6, max: 0.6 });
+  spawnParticles(player.x, player.y, '#9fd6ff', 30, 260); floatText(player.x, player.y - 28, '绝对零度!', '#9fd6ff'); }
+function castLaserBurst() { const la = skills.laser;
+  // 3秒内激光伤害翻倍 + 宽度翻倍
+  la.empower = 3.0; Audio.ult();
+  spawnParticles(player.x, player.y, '#ff4d8a', 20, 220); floatText(player.x, player.y - 28, '歼灭充能!', '#ff4d8a'); }
+function castBoomerangBurst() { const bm = skills.boomerang; cam.shake = 4;
+  // 向四周掷出8个回旋镖
+  for (let i = 0; i < 8; i++) { const ang = (i / 8) * TAU;
+    boomerangs.push({ x: player.x, y: player.y, ox: player.x, oy: player.y,
+      vx: Math.cos(ang) * bm.speed, vy: Math.sin(ang) * bm.speed,
+      dmg: bm.dmg * 1.5, pierce: bm.pierce, life: 1.5, hit: new Set(), color: '#ffe27a', angle: ang }); }
+  spawnParticles(player.x, player.y, '#ffe27a', 18, 200); floatText(player.x, player.y - 28, '飞轮风暴!', '#ffe27a'); }
+function castUlt() { const u = skills.ult; cam.shake = 20; Audio.ult(); flashScreen = 0.4;
   const r2 = u.radius * u.radius;
-  for (let i = enemies.length - 1; i >= 0; i--) { const e = enemies[i]; if (dist2(e.x, e.y, player.x, player.y) < r2) damageEnemy(e, u.dmg + player.level * 2, i); }
-  if (boss && dist2(boss.x, boss.y, player.x, player.y) < r2) damageBoss(u.dmg + player.level * 3);
-  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius, life: 0.6, max: 0.6, color: '#ffd86b' });
-  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius * 0.7, life: 0.45, max: 0.45, color: '#ff8fa3' });
-  spawnParticles(player.x, player.y, '#ffe27a', 50, 360); floatText(player.x, player.y - 28, '终焉爆发!!', '#ffd86b'); }
+  for (let i = enemies.length - 1; i >= 0; i--) { const e = enemies[i]; if (dist2(e.x, e.y, player.x, player.y) < r2) damageEnemy(e, u.dmg + player.level * 3, i); }
+  if (boss && dist2(boss.x, boss.y, player.x, player.y) < r2) damageBoss(u.dmg + player.level * 5);
+  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius, life: 0.8, max: 0.8, color: '#ffd86b' });
+  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius * 0.7, life: 0.6, max: 0.6, color: '#ff8fa3' });
+  particles.push({ kind: 'ring', x: player.x, y: player.y, r0: 10, r: u.radius * 0.4, life: 0.4, max: 0.4, color: '#ffffff' });
+  spawnParticles(player.x, player.y, '#ffe27a', 60, 400); spawnParticles(player.x, player.y, '#ff8fa3', 30, 320);
+  floatText(player.x, player.y - 28, '终焉爆发!!', '#ffd86b'); }
 
 // ========== 游戏重置 ==========
 function resetGame() {
@@ -1142,14 +1374,17 @@ function resetGame() {
   player.level = 1; player.xp = 0; player.xpNext = 5; player.kills = 0;
   player.invuln = 0; player.pickupRange = 90; player.regen = 0;
   player.damageReduction = 0; player.xpMult = 1; player.facing = -Math.PI / 2;
-  skills.bullet = { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12, btnCd: 0, btnCdMax: 3.0 };
-  skills.orbit = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, burstCd: 0, burstCdMax: 4.5 };
-  skills.aura = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, novaCd: 0, novaCdMax: 6.0 };
-  skills.chain = { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2 };
-  skills.frost = { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3 };
-  skills.laser = { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0 };
-  skills.boomerang = { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320 };
-  skills.ult = { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 20, cd: 0, dmg: 60, radius: 160 };
+  skills.bullet = { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12 };
+  skills.orbit = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, btnCd: 0, btnCdMax: 5.0 };
+  skills.aura = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, btnCd: 0, btnCdMax: 6.0 };
+  skills.chain = { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2, btnCd: 0, btnCdMax: 8.0 };
+  skills.frost = { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3, btnCd: 0, btnCdMax: 10.0 };
+  skills.laser = { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0, empower: 0, btnCd: 0, btnCdMax: 12.0 };
+  skills.boomerang = { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320, btnCd: 0, btnCdMax: 8.0 };
+  skills.ult = { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 45, cd: 0, dmg: 200, radius: 260 };
+  unlockedSkills = []; // 重置已解锁技能列表
+  ultUnlocked = false; // 终极技能重置为未解锁
+  firstBookGuaranteed = false; // 首个精英必掉技能书（保证早期拿到第一个技能）
   enemies = []; bullets = []; particles = []; gems = []; pickups = []; floats = [];
   chains = []; lasers = []; boomerangs = []; frosts = []; eqDrops = []; boss = null;
   time = 0; spawnTimer = 0; pickupTimer = 8; wave = 1; cam.shake = 0; nextBossStageIdx = 0;
@@ -1227,6 +1462,7 @@ const BOSS_STAGES = [
   { time: 660, kind: 'ultimate', name: '永夜魔主', hp: 3800, r: 60, speed: 48, dmg: 42, xp: 120, color: '#ff2dff', glow: '#ff00cc', dropLegend: true, atkPattern: 'spiral' },
 ];
 let nextBossStageIdx = 0;
+let bossWarnTimer = 0, bossWarnName = '', bossWarnColor = '#ff5a3c', bossWarnUlt = false;
 function spawnBoss(stage) {
   const hpScale = 1 + time / 120;
   boss = {
@@ -1238,7 +1474,9 @@ function spawnBoss(stage) {
     title: stage.name, kind: stage.kind, atkPattern: stage.atkPattern,
     dropRare: !!stage.dropRare, dropLegend: !!stage.dropLegend,
   };
-  floatText(W / 2, 100, '⚠ ' + stage.name + ' 降临 ⚠', stage.color);
+  // 全屏Boss预警横幅（3秒）
+  bossWarnTimer = 3.0; bossWarnName = stage.name; bossWarnColor = stage.color;
+  bossWarnUlt = stage.kind === 'ultimate';
   cam.shake = stage.kind === 'ultimate' ? 20 : 14;
   Audio.bossWarn();
   if (stage.kind === 'ultimate') flashScreen = 0.2;
@@ -1266,8 +1504,14 @@ function killBoss() {
   }
   if (boss.kind === 'ultimate') {
     pickups.push({ ...PICKUP_TYPES[0], x: boss.x, y: boss.y + 30, r: 14, life: 25, pulse: 0 });
-    floatText(boss.x, boss.y - 30, '终极击破！传说装备掉落！', '#ffe27a');
-  } else { floatText(player.x, player.y - 30, 'Boss 已击破！', '#ffe27a'); }
+    // 终极Boss必掉技能书
+    pickups.push({ ...PICKUP_TYPES[4], x: boss.x + 40, y: boss.y + 30, r: 14, life: 30, pulse: 0 });
+    floatText(boss.x, boss.y - 30, '终极击破！传说装备+技能书掉落！', '#ffe27a');
+  } else {
+    // 普通Boss 50%掉技能书
+    if (Math.random() < 0.5) pickups.push({ ...PICKUP_TYPES[4], x: boss.x + 40, y: boss.y + 30, r: 14, life: 30, pulse: 0 });
+    floatText(player.x, player.y - 30, 'Boss 已击破！', '#ffe27a');
+  }
   const killedKind = boss.kind;
   boss = null; Audio.bossKill();
   flashScreen = killedKind === 'ultimate' ? 0.45 : 0.3;
@@ -1301,43 +1545,47 @@ const PICKUP_TYPES = [
   { kind: 'magnet', icon: '⩕', color: '#4dd0ff', name: '磁铁', desc: '吸取全场经验宝石' },
   { kind: 'bomb', icon: '✺', color: '#ffaa33', name: '爆裂符', desc: '对全场敌人造成伤害' },
   { kind: 'chest', icon: '◆', color: '#ffe27a', name: '宝箱', desc: '获得大量经验' },
+  { kind: 'skillbook', icon: '📖', color: '#b066ff', name: '技能书', desc: '解锁新技能或升级已学技能' },
 ];
-function spawnPickup() { const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
+function spawnPickup() { const t = PICKUP_TYPES[randi(0, 3)]; // 0-3: 排除技能书（仅精英/Boss掉落）
   pickups.push({ ...t, x: rand(cam.followX + 60, cam.followX + W - 60), y: rand(cam.followY + 100, cam.followY + H - 60), r: 14, life: 18, pulse: 0 }); }
 function spawnPickupAt(x, y) {
   if (Math.random() < 0.18) {
     const slot = EQUIP_SLOTS[randi(0, 3)]; const rarity = pickRarity(); const eq = rollEquipment(slot, rarity);
     eqDrops.push({ ...eq, x: clamp(x, 30, MAP_W - 30), y: clamp(y, 30, MAP_H - 30), r: 14, life: 40, pulse: 0 }); return;
   }
-  const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
+  const t = PICKUP_TYPES[randi(0, 3)]; // 排除技能书
   pickups.push({ ...t, x: clamp(x, 30, MAP_W - 30), y: clamp(y, 30, MAP_H - 30), r: 14, life: 15, pulse: 0 });
 }
 
 // ========== 升级池 ==========
+// 技能解锁只通过"技能书"掉落完成；升级界面仅提供已学技能的强化与通用属性
+// req 字段标记该升级需对应技能已解锁才会出现
 const UPGRADES = [
   { id: 'bDmg', icon: '✦', name: '弹丸强化', desc: '暗夜弹伤害 +35%', apply: () => { skills.bullet.dmg *= 1.35; applyEquipStats(); }, maxLvl: 8, getLvl: () => skills.bullet.lvl },
   { id: 'bRate', icon: '⚡', name: '急速射击', desc: '暗夜弹射速 +20%', apply: () => { skills.bullet.cd *= 0.8; applyEquipStats(); }, maxLvl: 8, getLvl: () => 0 },
   { id: 'bCount', icon: '✲', name: '多重弹幕', desc: '暗夜弹数量 +1', apply: () => { skills.bullet.count++; skills.bullet.lvl++; }, maxLvl: 6, getLvl: () => skills.bullet.count - 1 },
   { id: 'bPierce', icon: '➳', name: '穿透弹头', desc: '暗夜弹穿透 +1', apply: () => { skills.bullet.pierce++; skills.bullet.lvl++; applyEquipStats(); }, maxLvl: 4, getLvl: () => skills.bullet.pierce },
-  { id: 'oNew', icon: '◉', name: '护体光球', desc: '解锁环绕光球，撞击敌人', apply: () => { skills.orbit.count++; skills.orbit.lvl++; applyEquipStats(); }, maxLvl: 6, getLvl: () => skills.orbit.count },
-  { id: 'oDmg', icon: '◎', name: '光球充能', desc: '光球伤害 +40%', apply: () => { skills.orbit.dmg *= 1.4; applyEquipStats(); }, maxLvl: 6, getLvl: () => skills.orbit.lvl },
-  { id: 'aNew', icon: '⊙', name: '幽冥光环', desc: '解锁周身伤害光环', apply: () => { skills.aura.radius = 70; skills.aura.dps = 12; skills.aura.lvl++; applyEquipStats(); }, maxLvl: 5, getLvl: () => skills.aura.lvl },
-  { id: 'aDmg', icon: '◌', name: '光环扩散', desc: '光环范围与伤害提升', apply: () => { skills.aura.radius += 18; skills.aura.dps *= 1.3; skills.aura.lvl++; applyEquipStats(); }, maxLvl: 5, getLvl: () => skills.aura.lvl },
-  { id: 'cNew', icon: '⚡', name: '闪电链', desc: '解锁闪电链，在敌人之间跳跃', apply: () => { skills.chain.lvl++; skills.chain.timer = 0.5; }, maxLvl: 5, getLvl: () => skills.chain.lvl },
-  { id: 'cUp', icon: '⚡', name: '雷劫', desc: '闪电链伤害+40%，目标+1，跳跃+1', apply: () => { skills.chain.dmg *= 1.4; skills.chain.targets++; skills.chain.bounce++; skills.chain.lvl++; }, maxLvl: 4, getLvl: () => skills.chain.lvl },
-  { id: 'fNew', icon: '❄', name: '冰冻新星', desc: '周期性释放冰霜，减速敌人并爆炸', apply: () => { skills.frost.lvl++; skills.frost.radius = 110; skills.frost.timer = 2; }, maxLvl: 5, getLvl: () => skills.frost.lvl },
-  { id: 'fUp', icon: '❄', name: '绝对零度', desc: '冰冻新星伤害+50%，范围+30', apply: () => { skills.frost.dmg *= 1.5; skills.frost.radius += 30; skills.frost.lvl++; }, maxLvl: 4, getLvl: () => skills.frost.lvl },
-  { id: 'lNew', icon: '⟿', name: '激光束', desc: '前方持续激光扫射，高DPS', apply: () => { skills.laser.lvl++; }, maxLvl: 5, getLvl: () => skills.laser.lvl },
-  { id: 'lUp', icon: '⟿', name: '歼灭光束', desc: '激光伤害+45%，宽度+6', apply: () => { skills.laser.dps *= 1.45; skills.laser.width += 6; skills.laser.lvl++; }, maxLvl: 4, getLvl: () => skills.laser.lvl },
-  { id: 'mNew', icon: '✧', name: '回旋镖', desc: '掷出回旋镖，飞出后返回，多次命中', apply: () => { skills.boomerang.lvl++; }, maxLvl: 5, getLvl: () => skills.boomerang.lvl },
-  { id: 'mUp', icon: '✧', name: '飞轮风暴', desc: '回旋镖伤害+40%，数量+1', apply: () => { skills.boomerang.dmg *= 1.4; skills.boomerang.count++; skills.boomerang.lvl++; applyEquipStats(); }, maxLvl: 4, getLvl: () => skills.boomerang.lvl },
+  { id: 'oDmg', icon: '◎', name: '光球充能', desc: '光球伤害 +40%', req: 'orbit', apply: () => { skills.orbit.dmg *= 1.4; skills.orbit.lvl++; applyEquipStats(); }, maxLvl: 6, getLvl: () => skills.orbit.lvl },
+  { id: 'aDmg', icon: '◌', name: '光环扩散', desc: '光环范围与伤害提升', req: 'aura', apply: () => { skills.aura.radius += 18; skills.aura.dps *= 1.3; skills.aura.lvl++; applyEquipStats(); }, maxLvl: 5, getLvl: () => skills.aura.lvl },
+  { id: 'cUp', icon: '⚡', name: '雷劫', desc: '闪电链伤害+40%，目标+1，跳跃+1', req: 'chain', apply: () => { skills.chain.dmg *= 1.4; skills.chain.targets++; skills.chain.bounce++; skills.chain.lvl++; }, maxLvl: 4, getLvl: () => skills.chain.lvl },
+  { id: 'fUp', icon: '❄', name: '绝对零度', desc: '冰冻新星伤害+50%，范围+30', req: 'frost', apply: () => { skills.frost.dmg *= 1.5; skills.frost.radius += 30; skills.frost.lvl++; }, maxLvl: 4, getLvl: () => skills.frost.lvl },
+  { id: 'lUp', icon: '⟿', name: '歼灭光束', desc: '激光伤害+45%，宽度+6', req: 'laser', apply: () => { skills.laser.dps *= 1.45; skills.laser.width += 6; skills.laser.lvl++; }, maxLvl: 4, getLvl: () => skills.laser.lvl },
+  { id: 'mUp', icon: '✧', name: '飞轮风暴', desc: '回旋镖伤害+40%，数量+1', req: 'boomerang', apply: () => { skills.boomerang.dmg *= 1.4; skills.boomerang.count++; skills.boomerang.lvl++; applyEquipStats(); }, maxLvl: 4, getLvl: () => skills.boomerang.lvl },
   { id: 'pSpeed', icon: '⇶', name: '迅捷', desc: '战机移动速度 +12%', apply: () => { player.speed *= 1.12; }, maxLvl: 6, getLvl: () => 0 },
   { id: 'pHp', icon: '♥', name: '装甲强化', desc: '最大生命 +25 并回满', apply: () => { player.maxHp += 25; player.hp = player.maxHp; }, maxLvl: 8, getLvl: () => 0 },
   { id: 'pRange', icon: '◎', name: '吸取领域', desc: '经验拾取范围 +40%', apply: () => { player.pickupRange *= 1.4; }, maxLvl: 5, getLvl: () => 0 },
   { id: 'pRegen', icon: '✚', name: '纳米修复', desc: '每秒回复 1.5 点生命', apply: () => { player.regen += 1.5; }, maxLvl: 5, getLvl: () => 0 },
-  { id: 'uUp', icon: '✺', name: '爆发核心', desc: '终极爆发伤害与范围提升，缩短CD', apply: () => { skills.ult.dmg += 25; skills.ult.radius += 25; skills.ult.cdMax = Math.max(10, skills.ult.cdMax - 2); }, maxLvl: 4, getLvl: () => 0 },
+  { id: 'uUp', icon: '✺', name: '爆发核心', desc: '终极伤害+40，范围+30，CD-3s', req: 'ult', apply: () => { skills.ult.lvl = (skills.ult.lvl || 0) + 1; skills.ult.dmg += 40; skills.ult.radius += 30; skills.ult.cdMax = Math.max(20, skills.ult.cdMax - 3); applyEquipStats(); }, maxLvl: 4, getLvl: () => skills.ult.lvl || 0 },
 ];
-function availableUpgrades() { return UPGRADES.filter(u => (upgradeLevels[u.id] || 0) < u.maxLvl); }
+function availableUpgrades() {
+  return UPGRADES.filter(u => {
+    if ((upgradeLevels[u.id] || 0) >= u.maxLvl) return false;
+    // 技能强化类：需对应技能已解锁
+    if (u.req && !isSkillUnlocked(u.req)) return false;
+    return true;
+  });
+}
 function showLevelUp() {
   state = STATE.LEVELUP;
   const pool = availableUpgrades(); const choices = []; const tmp = pool.slice();
@@ -1384,11 +1632,14 @@ function update(dt) {
   if (player.invuln > 0) player.invuln -= dt;
   if (player.regen > 0 && player.hp < player.maxHp) player.hp = Math.min(player.maxHp, player.hp + player.regen * dt);
 
-  // 技能CD
-  if (skills.bullet.btnCd > 0) skills.bullet.btnCd = Math.max(0, skills.bullet.btnCd - dt);
-  if (skills.orbit.burstCd > 0) skills.orbit.burstCd = Math.max(0, skills.orbit.burstCd - dt);
-  if (skills.aura.novaCd > 0) skills.aura.novaCd = Math.max(0, skills.aura.novaCd - dt);
+  // 技能CD（所有已解锁小技能 + 终极）
+  for (const sk of SKILL_CANDIDATES) {
+    if (skills[sk].lvl > 0 && skills[sk].btnCd > 0) skills[sk].btnCd = Math.max(0, skills[sk].btnCd - dt);
+  }
   if (skills.ult.cd > 0) skills.ult.cd = Math.max(0, skills.ult.cd - dt);
+  // 激光充能倒计时
+  if (skills.laser.empower > 0) skills.laser.empower = Math.max(0, skills.laser.empower - dt);
+  if (bossWarnTimer > 0) bossWarnTimer = Math.max(0, bossWarnTimer - dt);
 
   // Boss 触发
   if (!boss && nextBossStageIdx < BOSS_STAGES.length) {
@@ -1499,14 +1750,17 @@ function update(dt) {
     if (la.tickTimer <= 0) { la.tickTimer = 0.08;
       const cx = player.x, cy = player.y, a = la.angle;
       const endX = cx + Math.cos(a) * reach, endY = cy + Math.sin(a) * reach;
-      const halfW = la.width / 2;
+      const empowered = la.empower > 0;
+      const effW = la.width * (empowered ? 1.8 : 1);
+      const halfW = effW / 2;
+      const dmgMult = empowered ? 2.0 : 1.0;
       for (let i = 0; i < enemies.length; i++) {
         const e = enemies[i];
-        if (pointToSegDist(e.x, e.y, cx, cy, endX, endY) < halfW + e.r) damageEnemy(e, la.dps * 0.08, i, false);
+        if (pointToSegDist(e.x, e.y, cx, cy, endX, endY) < halfW + e.r) damageEnemy(e, la.dps * 0.08 * dmgMult, i, false);
       }
-      if (boss && pointToSegDist(boss.x, boss.y, cx, cy, endX, endY) < halfW + boss.r) damageBoss(la.dps * 0.06);
+      if (boss && pointToSegDist(boss.x, boss.y, cx, cy, endX, endY) < halfW + boss.r) damageBoss(la.dps * 0.06 * dmgMult);
     }
-    lasers.push({ x1: player.x, y1: player.y, a: la.angle, w: la.width, life: 0.06, max: 0.06 });
+    lasers.push({ x1: player.x, y1: player.y, a: la.angle, w: la.width * (la.empower > 0 ? 1.8 : 1), life: 0.06, max: 0.06 });
   }
   // 7.回旋镖
   const bm = skills.boomerang;
@@ -1736,7 +1990,16 @@ function damageEnemy(e, dmg, idx, showNum) {
 function killEnemy(e, idx) {
   spawnDeathBurst(e.x, e.y, e.color, e.r); spawnGem(e.x, e.y, e.xp); player.kills++;
   comboKill(e.x, e.y); Audio.kill();
-  if (e.elite) { spawnSparks(e.x, e.y, '#ffe27a', 12, 320); floatText(e.x, e.y - 20, '精英击破!', '#ffe27a'); }
+  if (e.elite) {
+    spawnSparks(e.x, e.y, '#ffe27a', 12, 320); floatText(e.x, e.y - 20, '精英击破!', '#ffe27a');
+    // 首个精英必掉技能书；之后 40% 概率掉落
+    if (!firstBookGuaranteed) {
+      firstBookGuaranteed = true;
+      pickups.push({ ...PICKUP_TYPES[4], x: e.x, y: e.y, r: 14, life: 30, pulse: 0 });
+    } else if (Math.random() < 0.40) {
+      pickups.push({ ...PICKUP_TYPES[4], x: e.x, y: e.y, r: 14, life: 30, pulse: 0 });
+    }
+  }
   if (Math.random() < 0.05) spawnPickupAt(e.x, e.y);
   if (e.ai === 'split' && !e.split) {
     for (let k = 0; k < 2; k++) {
@@ -1757,6 +2020,60 @@ function applyPickup(p) {
   else if (p.kind === 'bomb') { cam.shake = 14; for (let i = enemies.length - 1; i >= 0; i--) damageEnemy(enemies[i], 40 + time * 0.5, i);
     if (boss) damageBoss(40 + time * 0.5); spawnParticles(player.x, player.y, '#ffaa33', 30, 300); Audio.ult(); }
   else if (p.kind === 'chest') for (let i = 0; i < 6; i++) spawnGem(player.x + rand(-20, 20), player.y + rand(-20, 20), 2);
+  else if (p.kind === 'skillbook') useSkillBook();
+}
+// 技能书使用优先级：①补满3个小技能 ②解锁终极 ③随机升级已学技能(含终极)
+function useSkillBook() {
+  // ① 小技能未满3个：解锁一个未学小技能
+  if (unlockedSkills.length < MAX_SKILLS) {
+    const locked = SKILL_CANDIDATES.filter(s => !unlockedSkills.includes(s));
+    if (locked.length > 0) {
+      const pick = locked[randi(0, locked.length - 1)];
+      unlockSmallSkill(pick);
+      return;
+    }
+  }
+  // ② 小技能已满但终极未解锁：解锁终极
+  if (!ultUnlocked) { unlockUlt(); return; }
+  // ③ 全部解锁：随机升级一个已学技能（含终极）
+  const all = unlockedSkills.concat(['ult']);
+  const pick = all[randi(0, all.length - 1)];
+  const sk = skills[pick];
+  const upgId = { orbit: 'oDmg', aura: 'aDmg', chain: 'cUp', frost: 'fUp', laser: 'lUp', boomerang: 'mUp', ult: 'uUp' }[pick];
+  const upg = UPGRADES.find(u => u.id === upgId);
+  if (upg && (upgradeLevels[upgId] || 0) < upg.maxLvl) {
+    upg.apply(); Audio.equip(); spawnParticles(player.x, player.y, '#b066ff', 30, 260);
+    floatText(player.x, player.y - 28, '📖 ' + sk.name + ' 升级!', '#b066ff');
+  } else {
+    // 升级已满：经验补偿
+    gainXp(15); floatText(player.x, player.y - 28, '📖 技能已满 +15经验', '#b066ff');
+  }
+}
+// 解锁小技能并加入技能槽
+function unlockSmallSkill(name) {
+  if (unlockedSkills.includes(name) || unlockedSkills.length >= MAX_SKILLS) return;
+  const sk = skills[name];
+  switch (name) {
+    case 'orbit': sk.count = 1; break;
+    case 'aura': sk.radius = 70; sk.dps = 12; break;
+    case 'chain': sk.timer = 0.5; break;
+    case 'frost': sk.radius = 110; sk.timer = 2; break;
+  }
+  sk.lvl = 1;
+  unlockedSkills.push(name);
+  applyEquipStats();
+  Audio.equip(); spawnParticles(player.x, player.y, '#b066ff', 30, 260);
+  floatText(player.x, player.y - 50, '🔓 新技能：' + sk.name, '#b066ff');
+}
+// 解锁终极技能（CD长、伤害高）
+function unlockUlt() {
+  if (ultUnlocked) return;
+  ultUnlocked = true;
+  skills.ult.lvl = 1;
+  skills.ult.cd = 0;
+  Audio.ult(); spawnParticles(player.x, player.y, '#ffd86b', 40, 300);
+  floatText(player.x, player.y - 50, '🔓 终极技能解锁！', '#ffd86b');
+  cam.shake = 8;
 }
 function gainXp(v) {
   player.xp += v * player.xpMult;
