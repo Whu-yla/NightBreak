@@ -175,6 +175,43 @@
     font-size: 10px; color: rgba(200,208,220,.7); z-index: 2; letter-spacing: .5px; }
 
   .hint { position: absolute; bottom: 220px; left: 50%; transform: translateX(-50%); text-align: center; font-size: 12px; color: rgba(154,166,184,.5); pointer-events: none; z-index: 4; white-space: nowrap; }
+
+  #topBtns { position: absolute; top: 10px; right: 12px; z-index: 6; display: flex; gap: 8px; }
+  .top-btn { width: 34px; height: 34px; border-radius: 10px; pointer-events: auto; cursor: pointer;
+    background: rgba(10,14,28,.7); border: 1.5px solid rgba(255,255,255,.15);
+    display: flex; align-items: center; justify-content: center; font-size: 16px; color: #8affd6;
+    backdrop-filter: blur(3px); transition: transform .1s, border-color .1s; touch-action: none; }
+  .top-btn:active { transform: scale(.9); border-color: #8affd6; }
+
+  #pauseOverlay { display: none; }
+  #pauseOverlay.show { display: flex; }
+  .pause-btns { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+
+  #comboDisp { position: absolute; top: 38%; left: 50%; transform: translate(-50%,-50%); z-index: 4;
+    pointer-events: none; text-align: center; opacity: 0; transition: opacity .2s; }
+  #comboDisp.show { opacity: 1; }
+  #comboDisp .cnt { font-size: 42px; font-weight: 900; color: #ffe27a;
+    text-shadow: 0 0 20px rgba(255,226,122,.6), 0 2px 6px rgba(0,0,0,.5); letter-spacing: 2px; }
+  #comboDisp .lbl { font-size: 13px; color: #8affd6; letter-spacing: 4px; margin-top: 2px; }
+
+  .talent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 460px; width: 100%; }
+  .talent-card { background: linear-gradient(160deg, rgba(40,48,72,.92), rgba(18,22,38,.96));
+    border: 1.5px solid rgba(120,160,255,.2); border-radius: 12px; padding: 14px; text-align: left; position: relative; }
+  .talent-card.maxed { border-color: rgba(255,226,122,.5); box-shadow: 0 0 12px rgba(255,226,122,.15); }
+  .talent-card .t-icon { font-size: 22px; margin-bottom: 6px; }
+  .talent-card .t-name { font-size: 14px; font-weight: 700; color: #e8ecf3; margin-bottom: 3px; }
+  .talent-card .t-desc { font-size: 11px; color: #8a93a6; line-height: 1.5; margin-bottom: 8px; }
+  .talent-card .t-lvl { display: flex; align-items: center; justify-content: space-between; }
+  .talent-card .t-bar { display: flex; gap: 3px; }
+  .talent-card .t-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.1); }
+  .talent-card .t-dot.on { background: #8affd6; box-shadow: 0 0 6px rgba(138,255,214,.5); }
+  .talent-card .t-cost { font-size: 11px; color: #ffe27a; font-weight: 700; }
+  .talent-card .t-cost.cant { color: #ff6b8a; }
+  .talent-card .t-btn { margin-top: 6px; width: 100%; padding: 6px; border: none; border-radius: 6px;
+    background: linear-gradient(90deg, #4dd0ff, #8affd6); color: #06121a; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .talent-card .t-btn:disabled { background: rgba(255,255,255,.1); color: #5a6478; cursor: not-allowed; }
+  #talentPts { font-size: 15px; color: #ffe27a; font-weight: 700; margin-bottom: 12px; }
+  #totalXpDisp { font-size: 12px; color: #8a93a6; margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -190,6 +227,13 @@
   </div>
   <div id="lvBadge">Lv.<b id="tLv">1</b><br><span id="tXp" style="color:rgba(154,166,184,.6)">0/5</span></div>
 </div>
+
+<div id="topBtns">
+  <div class="top-btn" id="btnSound" title="音效">🔊</div>
+  <div class="top-btn" id="btnPause" title="暂停">⏸</div>
+</div>
+
+<div id="comboDisp"><div class="cnt">0</div><div class="lbl">COMBO</div></div>
 
 <div id="equipBar">
   <div class="eq-slot" data-slot="weapon"><span class="eq-tip">武器</span><span class="eq-icon"></span></div>
@@ -238,7 +282,7 @@
   <p style="max-width:460px;font-size:13px;line-height:1.8;color:#aab4c6;margin-bottom:20px">
     暗夜之中敌潮汹涌而来，驾驶战机自动释放弹幕清场。<br>
     击杀敌人获取经验升级，学习闪电链、激光束、回旋镖、冰冻新星等强力技能；<br>
-    拾取装备强化属性，每 90 秒击败Boss掉落传说装备！<br>
+    拾取装备强化属性，每 120 秒击败Boss掉落传说装备！<br>
     活得越久，敌潮越强。
   </p>
   <p style="font-size:12px;color:#8a93a6;margin-bottom:24px;line-height:1.7">
@@ -248,6 +292,7 @@
   <div style="display:flex;gap:12px;margin-bottom:24px">
     <button class="btn" id="btnStart">开始突围</button>
     <button class="btn-sm btn-rank" id="btnShowRank">排行榜</button>
+    <button class="btn-sm btn-rank" id="btnTalent">天赋</button>
   </div>
 </div>
 
@@ -266,7 +311,28 @@
     <button class="btn-sm" id="btnSubmit">提交上榜</button>
   </div>
   <div id="rankBox" style="display:none"><h3>暗 夜 英 雄 榜</h3><div class="rank-list" id="rankList"></div></div>
-  <button class="btn" id="btnRetry" style="margin-top:16px">再次突围</button>
+  <div style="display:flex;gap:12px;margin-top:16px">
+    <button class="btn" id="btnRetry">再次突围</button>
+    <button class="btn-sm btn-rank" id="btnShare">分享战绩</button>
+  </div>
+</div>
+
+<div class="overlay" id="pauseOverlay">
+  <h1 style="font-size:26px">暂 停</h1>
+  <p class="sub">游戏已暂停</p>
+  <div class="pause-btns">
+    <button class="btn" id="btnResume">继续游戏</button>
+    <button class="btn-sm btn-rank" id="btnQuitToMenu">返回主菜单</button>
+  </div>
+</div>
+
+<div class="overlay" id="talentScreen">
+  <h1 style="font-size:26px">天赋强化</h1>
+  <p class="sub">永久属性加成 · 每次升级获得1天赋点</p>
+  <div id="talentPts">天赋点：0</div>
+  <div id="totalXpDisp">累计经验：0</div>
+  <div class="talent-grid" id="talentGrid"></div>
+  <button class="btn" id="btnCloseTalent" style="margin-top:20px">返回</button>
 </div>
 
 <div class="overlay" id="rankScreen">
@@ -284,6 +350,165 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+// ===== 音效系统（WebAudio合成，无需外部文件） =====
+const Audio = {
+  actx: null, enabled: true,
+  init() { try { this.actx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e){ this.enabled=false; } },
+  resume() { if(this.actx && this.actx.state==='suspended') this.actx.resume(); },
+  tone(freq, dur, type='sine', vol=0.12, slide=0) {
+    if(!this.enabled || !this.actx) return;
+    const t = this.actx.currentTime;
+    const o = this.actx.createOscillator(), g = this.actx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(1, freq*slide), t+dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    o.connect(g); g.connect(this.actx.destination);
+    o.start(t); o.stop(t+dur);
+  },
+  noise(dur, vol=0.1) {
+    if(!this.enabled || !this.actx) return;
+    const t = this.actx.currentTime;
+    const buf = this.actx.createBuffer(1, this.actx.sampleRate*dur, this.actx.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1)*Math.pow(1-i/d.length, 2);
+    const s = this.actx.createBufferSource(); s.buffer = buf;
+    const g = this.actx.createGain(); g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    const f = this.actx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=2000;
+    s.connect(f); f.connect(g); g.connect(this.actx.destination); s.start(t);
+  },
+  shoot()  { this.tone(900, 0.04, 'square', 0.04, 0.5); },
+  hit()    { this.tone(180, 0.03, 'sawtooth', 0.05); },
+  kill()   { this.tone(520, 0.08, 'triangle', 0.07, 0.6); },
+  combo(n) { this.tone(440+Math.min(n,15)*40, 0.06, 'triangle', 0.06, 1.3); },
+  pickup() { this.tone(660, 0.05, 'sine', 0.08, 1.4); },
+  levelup(){ [523,659,784,1047].forEach((f,i)=>setTimeout(()=>this.tone(f,0.12,'triangle',0.1),i*60)); },
+  equip()  { this.tone(330,0.06,'sine',0.08); setTimeout(()=>this.tone(550,0.08,'sine',0.08),60); },
+  bossWarn(){ [880,440,880,440].forEach((f,i)=>setTimeout(()=>this.tone(f,0.15,'sawtooth',0.12),i*150)); },
+  bossKill(){ this.noise(0.5,0.15); [220,330,440,660].forEach((f,i)=>setTimeout(()=>this.tone(f,0.2,'triangle',0.1,f*1.5),i*80)); },
+  ult()    { this.tone(80, 0.3, 'sawtooth', 0.12, 3); this.noise(0.3, 0.08); },
+  hurt()   { this.tone(120, 0.1, 'sawtooth', 0.1, 0.5); },
+  frost()  { this.tone(1200, 0.15, 'sine', 0.06, 0.5); },
+  chain()  { this.tone(800, 0.05, 'square', 0.05, 2); },
+};
+Audio.init();
+// 首次交互时恢复AudioContext（浏览器策略）
+document.addEventListener('touchstart', ()=>Audio.resume(), {once:true});
+document.addEventListener('mousedown', ()=>Audio.resume(), {once:true});
+
+// ===== 连击系统 =====
+const combo = { count: 0, timer: 0, maxTime: 2.5, best: 0 };
+function comboKill(x, y) {
+  combo.count++; combo.timer = combo.maxTime;
+  if(combo.count > combo.best) combo.best = combo.count;
+  Audio.combo(combo.count); updateComboDisp();
+  if(combo.count >= 5 && combo.count % 5 === 0) {
+    floatText(x, y-20, combo.count+' COMBO!', '#ffe27a');
+    cam.shake = Math.max(cam.shake, 4);
+    timeScale = 0.35; slowMoTimer = 0.12;
+  }
+}
+let timeScale = 1, slowMoTimer = 0;
+
+// ===== 天赋系统（永久强化） =====
+const TALENT_KEY = 'nightbreak_talent_v1';
+const TOTAL_XP_KEY = 'nightbreak_totalxp';
+const TALENTS = [
+  { id:'dmg',    icon:'⚔', name:'伤害精通', desc:'全技能伤害 +8%/级', max:5, cost:1 },
+  { id:'hp',     icon:'♥', name:'生命强化', desc:'最大生命 +15/级', max:5, cost:1 },
+  { id:'spd',    icon:'⚡', name:'疾风步',   desc:'移速 +6%/级', max:5, cost:1 },
+  { id:'xp',     icon:'✦', name:'经验加成', desc:'经验获取 +10%/级', max:5, cost:1 },
+  { id:'regen',  icon:'✚', name:'纳米修复', desc:'每秒回血 +0.8/级', max:3, cost:2 },
+  { id:'cd',     icon:'◌', name:'冷却缩减', desc:'技能冷却 -5%/级', max:3, cost:2 },
+  { id:'pickup', icon:'◎', name:'吸引领域', desc:'拾取范围 +15%/级', max:3, cost:1 },
+  { id:'pierce', icon:'➳', name:'穿透强化', desc:'弹幕穿透 +1/级', max:2, cost:3 },
+];
+let talentLevels = {};
+let talentPoints = 0;
+let totalXp = 0;
+function loadTalent() {
+  try { talentLevels = JSON.parse(localStorage.getItem(TALENT_KEY)||'{}'); } catch(e){ talentLevels = {}; }
+  totalXp = parseInt(localStorage.getItem(TOTAL_XP_KEY)||'0') || 0;
+  talentPoints = 0;
+  // 每累计50经验获得1天赋点
+  const earned = Math.floor(totalXp / 50);
+  let spent = 0;
+  for(const t of TALENTS) { const lv = talentLevels[t.id]||0; spent += lv * t.cost; }
+  talentPoints = Math.max(0, earned - spent);
+}
+function saveTalent() {
+  localStorage.setItem(TALENT_KEY, JSON.stringify(talentLevels));
+  localStorage.setItem(TOTAL_XP_KEY, String(totalXp));
+}
+function getTalentMult(id) { return (talentLevels[id]||0); }
+function applyTalentBonus() {
+  player.maxHp = 100 + getTalentMult('hp')*15;
+  player.speed = 180 * (1 + getTalentMult('spd')*0.06);
+  player.pickupRange = 90 * (1 + getTalentMult('pickup')*0.15);
+  player.regen = getTalentMult('regen')*0.8;
+  player.xpMult = 1 + getTalentMult('xp')*0.10;
+  player._talentDmgMult = 1 + getTalentMult('dmg')*0.08;
+  player._talentCdMult = Math.max(0.5, 1 - getTalentMult('cd')*0.05);
+  player._talentPierce = getTalentMult('pierce');
+}
+function renderTalentUI() {
+  loadTalent();
+  document.getElementById('talentPts').textContent = '天赋点：' + talentPoints;
+  document.getElementById('totalXpDisp').textContent = '累计经验：' + totalXp + ' (每50经验+1点)';
+  const grid = document.getElementById('talentGrid');
+  grid.innerHTML = TALENTS.map(t => {
+    const lv = talentLevels[t.id]||0; const maxed = lv>=t.max;
+    const canBuy = !maxed && talentPoints >= t.cost;
+    const dots = Array.from({length:t.max},(_,i)=>`<span class="t-dot ${i<lv?'on':''}"></span>`).join('');
+    return `<div class="talent-card ${maxed?'maxed':''}">
+      <div class="t-icon">${t.icon}</div>
+      <div class="t-name">${t.name}</div>
+      <div class="t-desc">${t.desc}</div>
+      <div class="t-lvl"><div class="t-bar">${dots}</div>
+      <span class="t-cost ${!canBuy&&!maxed?'cant':''}">${maxed?'已满级':t.cost+'点'}</span></div>
+      <button class="t-btn" data-talent="${t.id}" ${!canBuy?'disabled':''}>${maxed?'已满级':'升级'}</button>
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.t-btn[data-talent]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.talent; const t = TALENTS.find(x=>x.id===id);
+      if(!t) return; const lv = talentLevels[id]||0;
+      if(lv>=t.max || talentPoints<t.cost) return;
+      talentLevels[id] = lv+1; talentPoints -= t.cost;
+      saveTalent(); renderTalentUI(); Audio.levelup();
+    };
+  });
+}
+
+// ===== 分享功能（预留微信接口） =====
+function shareScore() {
+  const m=Math.floor(time/60), s=Math.floor(time%60);
+  const shareText = `我在暗夜突围中存活了${m}分${s}秒，到达Lv.${player.level}，击杀${player.kills}个敌人！你能超过我吗？`;
+  // 微信小游戏环境
+  if(typeof wx !== 'undefined' && wx.shareAppMessage) {
+    wx.shareAppMessage({ title: shareText, imageUrl: '' });
+  } else {
+    // Web环境：复制到剪贴板
+    if(navigator.clipboard) navigator.clipboard.writeText(shareText).catch(()=>{});
+    floatText(player.x, player.y-40, '已复制战绩到剪贴板', '#8affd6');
+  }
+}
+
+// ===== 性能优化：帧率检测 + shadowBlur 降级 =====
+let shadowEnabled = true, frameTimes = [], avgFps = 60;
+function updatePerf(dt) {
+  frameTimes.push(dt);
+  if(frameTimes.length > 60) frameTimes.shift();
+  if(frameTimes.length === 60) {
+    const avg = frameTimes.reduce((a,b)=>a+b,0) / frameTimes.length;
+    avgFps = 1/avg;
+    if(avgFps < 35) shadowEnabled = false;
+    else if(avgFps > 50) shadowEnabled = true;
+  }
+}
+
 function resize() {
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
@@ -309,9 +534,10 @@ function pickRarity() { const r = Math.random()*100; let acc=0;
 function pickRarityBoss() { const r=Math.random()*100;
   if (r<30) return 'legend'; if (r<70) return 'epic'; if (r<90) return 'rare'; return 'common'; }
 
-const STATE = { START: 0, PLAY: 1, LEVELUP: 2, OVER: 3 };
+const STATE = { START: 0, PLAY: 1, LEVELUP: 2, OVER: 3, PAUSE: 4 };
 let state = STATE.START;
 const cam = { x:0, y:0, shake:0 };
+let flashScreen = 0;
 
 const player = {
   x:0,y:0,r:16, hp:100,maxHp:100, speed:180, level:1,xp:0,xpNext:5, kills:0,
@@ -370,16 +596,20 @@ function applyEquipStats() {
       case 'bulletPierce': bonusBulletPierce += v; break;
     } }
   }
-  skills.bullet.dmg = 12 * bonusBulletDmg * bonusAllDmg;
-  skills.bullet.cd  = Math.max(0.15, 0.7 * bonusBulletCd);
-  skills.bullet.pierce = Math.max(0, (upgradeLevels['bPierce']||0) + bonusBulletPierce);
-  skills.orbit.dmg  = 8 * bonusAllDmg;
-  if (skills.aura.lvl > 0) skills.aura.dps = 12 * bonusAllDmg * Math.pow(1.3, Math.max(0,skills.aura.lvl-1));
-  skills.chain.dmg  = 18 * bonusAllDmg;
-  skills.frost.dmg  = 20 * bonusAllDmg;
-  skills.laser.dps  = 55 * bonusAllDmg;
-  skills.boomerang.dmg = 16 * bonusAllDmg;
-  skills.ult.dmg    = 60 * bonusAllDmg;
+  const tDmg = player._talentDmgMult||1, tCd = player._talentCdMult||1, tPierce = player._talentPierce||0;
+  skills.bullet.dmg = 12 * bonusBulletDmg * bonusAllDmg * tDmg;
+  skills.bullet.cd  = Math.max(0.15, 0.7 * bonusBulletCd * tCd);
+  skills.bullet.pierce = Math.max(0, (upgradeLevels['bPierce']||0) + bonusBulletPierce + tPierce);
+  skills.orbit.dmg  = 8 * bonusAllDmg * tDmg;
+  if (skills.aura.lvl > 0) skills.aura.dps = 12 * bonusAllDmg * tDmg * Math.pow(1.3, Math.max(0,skills.aura.lvl-1));
+  skills.chain.dmg  = 18 * bonusAllDmg * tDmg;
+  skills.frost.dmg  = 20 * bonusAllDmg * tDmg;
+  skills.laser.dps  = 55 * bonusAllDmg * tDmg;
+  skills.boomerang.dmg = 16 * bonusAllDmg * tDmg;
+  skills.ult.dmg    = 60 * bonusAllDmg * tDmg;
+  skills.chain.cd   = 2.2 * tCd;
+  skills.frost.cd   = 7.0 * tCd;
+  skills.boomerang.cd = 1.6 * tCd;
 }
 function updateEquipUI() {
   for (const slot of EQUIP_SLOTS) {
@@ -398,7 +628,7 @@ function pickupEquipment(eqPick) {
   if (!cur || order[eqPick.rarity] >= order[cur.rarity]) {
     if (cur) { const xpGain = (cur.rarity==='legend'?20:cur.rarity==='epic'?10:cur.rarity==='rare'?5:2); gainXp(xpGain);
       floatText(player.x, player.y-40, '分解+'+xpGain+'经验', '#9aa6b8'); }
-    equipment[eqPick.slot] = eqPick; applyEquipStats();
+    equipment[eqPick.slot] = eqPick; applyEquipStats(); Audio.equip();
     if (player.hp > player.maxHp) player.hp = player.maxHp;
     updateEquipUI();
     floatText(player.x, player.y-28, '获得 ' + RARITY[eqPick.rarity].name + ' ' + EQ_SLOT_NAME[eqPick.slot].split(' ')[1], RARITY[eqPick.rarity].color);
@@ -478,7 +708,7 @@ function castAuraNova(){ const au=skills.aura; cam.shake=6;
   if(boss && dist2(boss.x,boss.y,player.x,player.y)<r2) damageBoss(au.dps*4);
   particles.push({kind:'ring',x:player.x,y:player.y,r0:10,r,life:0.45,max:0.45,color:'#c89bff'});
   spawnParticles(player.x,player.y,'#b066ff',24,220); floatText(player.x,player.y-28,'幽冥冲击!','#c89bff'); }
-function castUlt(){ const u=skills.ult; cam.shake=16;
+function castUlt(){ const u=skills.ult; cam.shake=16; Audio.ult();
   const r2=u.radius*u.radius;
   for(let i=enemies.length-1;i>=0;i--){ const e=enemies[i]; if(dist2(e.x,e.y,player.x,player.y)<r2) damageEnemy(e,u.dmg+player.level*2,i); }
   if(boss && dist2(boss.x,boss.y,player.x,player.y)<r2) damageBoss(u.dmg+player.level*3);
@@ -509,6 +739,8 @@ function resetGame(){
   time=0; spawnTimer=0; pickupTimer=8; wave=1; cam.shake=0;
   for(const slot of EQUIP_SLOTS) equipment[slot]=null;
   for(const k in upgradeLevels) delete upgradeLevels[k];
+  loadTalent(); applyTalentBonus();
+  combo.count=0; combo.timer=0; combo.best=0; timeScale=1; slowMoTimer=0; flashScreen=0;
   applyEquipStats(); updateEquipUI();
 }
 
@@ -526,20 +758,24 @@ function spawnEnemy(){
   else if(side===2){x=rand(-margin,W+margin);y=H+margin;}
   else{x=-margin;y=rand(-margin,H+margin);}
   let type='grunt'; const r=Math.random();
-  if(time>30 && r<0.35) type='runner';
-  if(time>60 && r>0.7 && r<0.92) type='brute';
-  if(time>90 && r>0.92) type='tank';
-  if(time<30) type='grunt';
+  if(time>10 && r<0.35) type='runner';
+  if(time>40 && r>0.7 && r<0.92) type='brute';
+  if(time>75 && r>0.92) type='tank';
+  if(time<10) type='grunt';
   const t=ENEMY_TYPES[type]; const hpScale=1+time/60, dmgScale=1+time/120;
-  enemies.push({type,x,y,r:t.r,hp:t.hp*hpScale,maxHp:t.hp*hpScale,speed:t.speed,dmg:t.dmg*dmgScale,xp:t.xp,
-    color:t.color,glow:t.glow,shape:t.shape,hitFlash:0,slow:0,spin:rand(0,TAU)});
+  // 精英怪：每30秒一只强化版
+  const elite = Math.floor(time/30) > Math.floor((time-1)/30) && time>20;
+  const eliteMult = elite ? 2.5 : 1;
+  enemies.push({type,x,y,r:t.r*eliteMult,hp:t.hp*hpScale*eliteMult,maxHp:t.hp*hpScale*eliteMult,
+    speed:t.speed,dmg:t.dmg*dmgScale,xp:t.xp*eliteMult,
+    color:t.color,glow:t.glow,shape:t.shape,hitFlash:0,slow:0,spin:rand(0,TAU),elite});
 }
 
 // Boss
 function spawnBoss(){ const hpScale=1+time/80;
   boss={x:W/2,y:-80,r:40,hp:800*hpScale,maxHp:800*hpScale,speed:40,dmg:28,xp:30,
     color:'#ff2d55',glow:'#ff0044',hitFlash:0,slow:0,angle:0,phase:0,attackTimer:0};
-  floatText(W/2,100,'⚠ BOSS 降临 ⚠','#ff4d6d'); cam.shake=14; }
+  floatText(W/2,100,'⚠ BOSS 降临 ⚠','#ff4d6d'); cam.shake=14; Audio.bossWarn(); }
 function damageBoss(dmg){ boss.hp-=dmg; boss.hitFlash=0.1;
   spawnParticles(boss.x+rand(-10,10),boss.y+rand(-10,10),'#ff4d6d',3,80);
   if(boss.hp<=0) killBoss(); }
@@ -553,7 +789,9 @@ function killBoss(){
   for(let i=0;i<n;i++){ const slot=EQUIP_SLOTS[randi(0,3)]; const rarity=pickRarityBoss();
     const eq=rollEquipment(slot,rarity);
     eqDrops.push({...eq,x:boss.x+rand(-40,40),y:boss.y+rand(-40,40),r:14,life:40,pulse:rand(0,TAU)}); }
-  boss=null; floatText(player.x,player.y-30,'Boss 已击破！','#ffe27a');
+  boss=null; floatText(player.x,player.y-30,'Boss 已击破！','#ffe27a'); Audio.bossKill();
+  // Boss击杀全屏白闪+慢动作
+  flashScreen = 0.3; timeScale = 0.3; slowMoTimer = 0.4;
 }
 
 function spawnParticles(x,y,color,n,spd){
@@ -626,6 +864,13 @@ function showLevelUp(){
 }
 
 function update(dt){
+  // 慢动作 + 连击计时 + 性能检测
+  if(slowMoTimer > 0) { slowMoTimer -= dt; if(slowMoTimer <= 0) timeScale = 1; }
+  dt *= timeScale;
+  updatePerf(dt);
+  if(combo.timer > 0) { combo.timer -= dt; if(combo.timer <= 0) { combo.count = 0; updateComboDisp(); } }
+  if(flashScreen > 0) flashScreen -= dt * 2;
+
   time += dt;
   let mx=0,my=0;
   if(keys['a']||keys['arrowleft'])  mx-=1;
@@ -654,7 +899,7 @@ function update(dt){
   if(skills.ult.cd>0)       skills.ult.cd      =Math.max(0,skills.ult.cd-dt);
   updateSkillButtons();
 
-  if(!boss && time>0 && Math.floor(time/90) > Math.floor((time-dt)/90)) spawnBoss();
+  if(!boss && time>0 && Math.floor(time/120) > Math.floor((time-dt)/120)) spawnBoss();
 
   spawnTimer -= dt;
   const targetCount = Math.min(8+Math.floor(time/4)*2, 90);
@@ -678,6 +923,7 @@ function update(dt){
       const best = findClosestEnemy(player.x,player.y);
       if(best){
         const baseAng = Math.atan2(best.y-player.y, best.x-player.x);
+        Audio.shoot();
         for(let i=0;i<b.count;i++){ const off=(i-(b.count-1)/2)*b.spread; const a=baseAng+off;
           bullets.push({x:player.x,y:player.y,r:5,vx:Math.cos(a)*b.speed,vy:Math.sin(a)*b.speed,
             dmg:b.dmg,pierce:b.pierce,hit:new Set(),life:1.6,color:'#8affd6'}); } } } }
@@ -725,7 +971,7 @@ function update(dt){
         for(let i=0;i<hitList.length;i++){ const tgt=hitList[i]; const dmg=ch.dmg*Math.pow(0.78,i);
           if(tgt===boss) damageBoss(dmg); else { const idx=enemies.indexOf(tgt); if(idx>=0) damageEnemy(tgt,dmg,idx); } }
         const pts=[{x:player.x,y:player.y}]; for(const t of hitList) pts.push({x:t.x,y:t.y});
-        chains.push({pts, life:0.28, max:0.28});
+        chains.push({pts, life:0.28, max:0.28}); Audio.chain();
       } } }
 
   // 5.冰冻
@@ -737,7 +983,7 @@ function update(dt){
         if(dist2(e.x,e.y,player.x,player.y)<r2){ damageEnemy(e,fr.dmg,i); e.slow=Math.max(e.slow,fr.slowDur); } }
       if(boss && dist2(boss.x,boss.y,player.x,player.y)<r2){ damageBoss(fr.dmg*0.6); boss.slow=Math.max(boss.slow||0,fr.slowDur*0.5); }
       frosts.push({x:player.x,y:player.y,r0:10,r:fr.radius,life:0.5,max:0.5});
-      spawnParticles(player.x,player.y,'#9fd6ff',26,220); } }
+      spawnParticles(player.x,player.y,'#9fd6ff',26,220); Audio.frost(); } }
 
   // 6.激光
   const la = skills.laser;
@@ -809,7 +1055,7 @@ function update(dt){
     e.x += Math.cos(ang)*sp*dt; e.y += Math.sin(ang)*sp*dt;
     if(player.invuln<=0 && dist2(e.x,e.y,player.x,player.y)<(e.r+player.r)**2){
       const realDmg = e.dmg*(1-player.damageReduction);
-      player.hp -= realDmg; player.invuln=0.6; cam.shake=8;
+      player.hp -= realDmg; player.invuln=0.6; cam.shake=8; Audio.hurt();
       spawnParticles(player.x,player.y,'#ff4d6d',8,160);
       if(player.hp<=0){player.hp=0;gameOver();return;} } }
 
@@ -897,25 +1143,27 @@ function updateSkillButtons(){
   }
 }
 
-function damageEnemy(e,dmg,idx){ e.hp-=dmg; e.hitFlash=0.1; if(e.hp<=0) killEnemy(e,idx); }
+function damageEnemy(e,dmg,idx){ e.hp-=dmg; e.hitFlash=0.1; Audio.hit(); if(e.hp<=0) killEnemy(e,idx); }
 function killEnemy(e,idx){
   spawnParticles(e.x,e.y,e.color,10,200); spawnGem(e.x,e.y,e.xp); player.kills++;
+  comboKill(e.x,e.y); Audio.kill();
+  if(e.elite){ spawnParticles(e.x,e.y,'#ffe27a',16,280); floatText(e.x,e.y-20,'精英击破!','#ffe27a'); }
   if(Math.random()<0.05) spawnPickupAt(e.x,e.y); enemies.splice(idx,1); }
 function applyPickup(p){
-  floatText(player.x,player.y-20,p.name,p.color); spawnParticles(p.x,p.y,p.color,16,220);
+  floatText(player.x,player.y-20,p.name,p.color); spawnParticles(p.x,p.y,p.color,16,220); Audio.pickup();
   if(p.kind==='heal') player.hp=Math.min(player.maxHp,player.hp+40);
   else if(p.kind==='magnet') for(const g of gems) g.pull=true;
   else if(p.kind==='bomb'){
     cam.shake=14; for(let i=enemies.length-1;i>=0;i--) damageEnemy(enemies[i],40+time*0.5,i);
-    if(boss) damageBoss(40+time*0.5); spawnParticles(player.x,player.y,'#ffaa33',30,300); }
+    if(boss) damageBoss(40+time*0.5); spawnParticles(player.x,player.y,'#ffaa33',30,300); Audio.ult(); }
   else if(p.kind==='chest') for(let i=0;i<6;i++) spawnGem(player.x+rand(-20,20),player.y+rand(-20,20),2);
 }
 function gainXp(v){
-  player.xp += v*player.xpMult;
+  player.xp += v*player.xpMult; totalXp += Math.floor(v*player.xpMult);
   while(player.xp >= player.xpNext){
     player.xp -= player.xpNext; player.level++;
     player.xpNext = Math.floor(5 + player.level*3 + player.level*player.level*0.5);
-    spawnParticles(player.x,player.y,'#8affd6',20,200); showLevelUp(); return; }
+    spawnParticles(player.x,player.y,'#8affd6',20,200); Audio.levelup(); showLevelUp(); return; }
 }
 // 排行榜
 const RANK_KEY = 'nightbreak_rank_v1';
@@ -951,6 +1199,7 @@ function renderRank(containerId, highlightEntry){
 }
 function gameOver(){
   state=STATE.OVER;
+  saveTalent(); // 保存累计经验
   const m=Math.floor(time/60),s=Math.floor(time%60);
   document.getElementById('goStats').innerHTML=
     `<div class="k">存活时间</div><div class="v">${m}:${String(s).padStart(2,'0')}</div>`+
@@ -1041,7 +1290,13 @@ function drawOrbit(){
 function drawEnemy(e){
   ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(e.spin);
   if(e.hitFlash>0) ctx.filter='brightness(3)';
-  ctx.shadowColor = e.glow; ctx.shadowBlur = 14;
+  // 精英怪金色光环
+  if(e.elite){
+    ctx.shadowColor='#ffe27a'; ctx.shadowBlur=20;
+    ctx.strokeStyle='rgba(255,226,122,0.6)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(0,0,e.r+6,0,TAU); ctx.stroke();
+  }
+  ctx.shadowColor = e.glow; ctx.shadowBlur = shadowEnabled ? 14 : 0;
   const R=e.r; const col = e.slow>0? blendColor(e.color,'#9fd6ff',0.5):e.color;
   switch(e.shape){
     case 'blob':{ ctx.fillStyle=col; ctx.beginPath();
@@ -1129,7 +1384,7 @@ function drawBullet(b){
   const grad=ctx.createLinearGradient(tx,ty,b.x,b.y);
   grad.addColorStop(0,hexA(b.color,0)); grad.addColorStop(1,b.color);
   ctx.strokeStyle=grad; ctx.lineWidth=b.r*1.8; ctx.lineCap='round';
-  ctx.shadowColor=b.color; ctx.shadowBlur=14;
+  ctx.shadowColor=b.color; ctx.shadowBlur=shadowEnabled?14:0;
   ctx.beginPath(); ctx.moveTo(tx,ty); ctx.lineTo(b.x,b.y); ctx.stroke();
   ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(b.x,b.y,b.r*0.6,0,TAU); ctx.fill();
   ctx.restore();
@@ -1280,6 +1535,11 @@ function render(){
   drawParticles();
   drawFloats();
   ctx.restore();
+  // 全屏白闪（Boss击杀等）
+  if(flashScreen > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${flashScreen})`;
+    ctx.fillRect(0, 0, W, H);
+  }
 }
 
 function updateHUD(){
@@ -1292,12 +1552,17 @@ function updateHUD(){
   document.getElementById('tLv').textContent=player.level;
   document.getElementById('tXp').textContent=Math.floor(player.xp)+'/'+player.xpNext;
 }
+function updateComboDisp(){
+  const el = document.getElementById('comboDisp');
+  if(combo.count >= 3){ el.classList.add('show'); el.querySelector('.cnt').textContent = combo.count; }
+  else el.classList.remove('show');
+}
 
 function loop(ts){
   if(!lastTime) lastTime=ts;
   let dt=(ts-lastTime)/1000; lastTime=ts; if(dt>0.05) dt=0.05;
   if(state===STATE.PLAY) update(dt);
-  if(state===STATE.PLAY || state===STATE.LEVELUP || state===STATE.OVER){ render(); updateHUD(); }
+  if(state===STATE.PLAY || state===STATE.LEVELUP || state===STATE.OVER || state===STATE.PAUSE){ render(); updateHUD(); }
   else drawBackground();
   requestAnimationFrame(loop);
 }
@@ -1333,6 +1598,50 @@ document.getElementById('btnShowRank').onclick = () => {
 document.getElementById('btnCloseRank').onclick = () => {
   document.getElementById('rankScreen').classList.remove('show');
 };
+// 暂停
+document.getElementById('btnPause').onclick = () => {
+  if(state===STATE.PLAY){ state=STATE.PAUSE; document.getElementById('pauseOverlay').classList.add('show'); }
+};
+document.getElementById('btnResume').onclick = () => {
+  if(state===STATE.PAUSE){ state=STATE.PLAY; document.getElementById('pauseOverlay').classList.remove('show'); }
+};
+document.getElementById('btnQuitToMenu').onclick = () => {
+  state=STATE.START;
+  document.getElementById('pauseOverlay').classList.remove('show');
+  document.getElementById('controls').classList.remove('show');
+  document.getElementById('startScreen').classList.add('show');
+};
+// 音效开关
+document.getElementById('btnSound').onclick = () => {
+  Audio.enabled = !Audio.enabled;
+  document.getElementById('btnSound').textContent = Audio.enabled ? '🔊' : '🔇';
+  if(Audio.enabled) Audio.resume();
+};
+// 天赋
+document.getElementById('btnTalent').onclick = () => {
+  renderTalentUI();
+  document.getElementById('talentScreen').classList.add('show');
+};
+document.getElementById('btnCloseTalent').onclick = () => {
+  document.getElementById('talentScreen').classList.remove('show');
+};
+// 分享
+document.getElementById('btnShare').onclick = () => { shareScore(); };
+// 微信小游戏：切后台自动暂停
+if(typeof document!=='undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if(document.hidden && state===STATE.PLAY) {
+      state=STATE.PAUSE; document.getElementById('pauseOverlay').classList.add('show');
+    }
+  });
+}
+// 微信小游戏：配置分享
+if(typeof wx!=='undefined') {
+  wx.onShareAppMessage && wx.onShareAppMessage(() => ({
+    title: '暗夜突围 - 你能比我活更久吗？',
+    imageUrl: ''
+  }));
+}
 
 requestAnimationFrame(loop);
 </script>
