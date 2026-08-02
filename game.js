@@ -190,149 +190,28 @@ Audio.init();
 
 // ========== 精灵图加载 ==========
 const SPRITES = {};
+// 用户已手动抠好透明 PNG，直接使用，无需运行时抠除白底
 const SPRITE_LIST = [
-  ['player', 'assets/sprites/player_fighter_1.jpg'],
-  ['boss', 'assets/sprites/boss_demon_1.jpg'],
-  ['blob', 'assets/sprites/enemy_blob_1.jpg'],
-  ['spike', 'assets/sprites/enemy_spike_1.jpg'],
-  ['skull', 'assets/sprites/enemy_skull_1.jpg'],
-  ['cube', 'assets/sprites/enemy_cube_1.jpg'],
+  ['player', 'assets/sprites/player_fighter_1.png'],
+  ['boss', 'assets/sprites/boss_demon_1.png'],
+  ['blob', 'assets/sprites/enemy_blob_1.png'],
+  ['spike', 'assets/sprites/enemy_spike_1.png'],
+  ['skull', 'assets/sprites/enemy_skull_1.png'],
+  ['cube', 'assets/sprites/enemy_cube_1.png'],
   ['bg', 'assets/sprites/bg_space_1.jpg'],
-  ['gem', 'assets/sprites/item_gem_1.jpg'],
-  ['heart', 'assets/sprites/item_heart_1.jpg'],
-  ['chest', 'assets/sprites/item_chest_1.jpg'],
-  ['equip', 'assets/sprites/item_equip_1.jpg'],
-  ['magnet', 'assets/sprites/item_magnet_1.jpg'],
-  ['bomb', 'assets/sprites/item_bomb_1.jpg'],
+  ['gem', 'assets/sprites/item_gem_1.png'],
+  ['heart', 'assets/sprites/item_heart_1.png'],
+  ['chest', 'assets/sprites/item_chest_1.png'],
+  ['equip', 'assets/sprites/item_equip_1.png'],
+  ['magnet', 'assets/sprites/item_magnet_1.png'],
+  ['bomb', 'assets/sprites/item_bomb_1.png'],
 ];
 let spritesReady = 0;
 const spritesTotal = SPRITE_LIST.length;
-// 把 JPG 白底抠除为透明，存到离屏 canvas（bg 背景图不抠）
-// 算法：三步法
-//   1) 洪水填充：从四边向内扩散，只标记与边缘连通的"真背景"（防止主体内部白色被误抠）
-//   2) 光晕清理：标记背景外缘 1~2 圈的"亮且低饱和"像素为光晕白边，淡化并去污染
-//      —— 这一步解决边缘抗锯齿半白像素残留导致的白边光晕
-//   3) 抗锯齿去污染：对半透明且紧邻背景的像素去除白色分量
+// 用户已手动抠好透明 PNG（带 alpha 通道），直接使用原图即可
+// 背景图 bg 保持 jpg 不透明
 function processSprite(key, img) {
-  if (key === 'bg') { SPRITES[key] = img; return; }
-  const w = img.width, h = img.height;
-  const c = wx.createCanvas(); c.width = w; c.height = h;
-  const cx = c.getContext('2d');
-  cx.drawImage(img, 0, 0);
-  let data;
-  try { data = cx.getImageData(0, 0, w, h); } catch (e) { SPRITES[key] = img; return; }
-  const d = data.data;
-
-  // 取像素亮度/饱和度信息
-  function bgScore(idx) {
-    const r = d[idx], g = d[idx + 1], b = d[idx + 2];
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    return { light: (mx + mn) / 2, sat: mx - mn };
-  }
-  // 严格判背景：用于洪水填充传播（避免侵入主体）
-  function isBgLike(idx) { const s = bgScore(idx); return s.light > 165 && s.sat < 50; }
-
-  // ---- 第1步：洪水填充标记真背景 ----
-  const visited = new Uint8Array(w * h);
-  const queue = [];
-  for (let x = 0; x < w; x++) {
-    const i0 = (0 * w + x) * 4, i1 = ((h - 1) * w + x) * 4;
-    if (isBgLike(i0) && !visited[x]) { visited[x] = 1; queue.push(x); }
-    if (isBgLike(i1) && !visited[(h - 1) * w + x]) { visited[(h - 1) * w + x] = 1; queue.push((h - 1) * w + x); }
-  }
-  for (let y = 0; y < h; y++) {
-    const i0 = (y * w + 0) * 4, i1 = (y * w + (w - 1)) * 4;
-    if (isBgLike(i0) && !visited[y * w]) { visited[y * w] = 1; queue.push(y * w); }
-    if (isBgLike(i1) && !visited[y * w + w - 1]) { visited[y * w + w - 1] = 1; queue.push(y * w + w - 1); }
-  }
-  while (queue.length) {
-    const pos = queue.pop();
-    const px = pos % w, py = (pos - px) / w;
-    if (px > 0) { const np = pos - 1; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
-    if (px < w - 1) { const np = pos + 1; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
-    if (py > 0) { const np = pos - w; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
-    if (py < h - 1) { const np = pos + w; if (!visited[np] && isBgLike(np * 4)) { visited[np] = 1; queue.push(np); } }
-  }
-  // 真背景像素：按白度淡化 alpha
-  for (let pos = 0; pos < w * h; pos++) {
-    if (!visited[pos]) continue;
-    const idx = pos * 4;
-    const s = bgScore(idx);
-    const lightT = clamp((s.light - 165) / (255 - 165), 0, 1);
-    const satT = clamp(1 - s.sat / 50, 0, 1);
-    const alpha = 1 - Math.min(1, lightT * 1.3 + satT * 0.3);
-    d[idx + 3] = Math.round(d[idx + 3] * alpha);
-  }
-
-  // ---- 第2步：光晕清理（关键）----
-  // 标记背景外缘 1~2 圈"亮且低饱和"的非背景像素为光晕，淡化并去污染
-  // 用 8 邻域判定紧邻背景，确保斜向白边也被捕获
-  const halo = new Uint8Array(w * h);
-  const ringQ = [];
-  function isHaloLike(idx) { const s = bgScore(idx); return s.light > 115 && s.sat < 95; }
-  for (let pos = 0; pos < w * h; pos++) {
-    if (visited[pos]) continue;
-    if (!isHaloLike(pos * 4)) continue;
-    const px = pos % w, py = (pos - px) / w;
-    let adjBg = false;
-    if (px > 0 && visited[pos - 1]) adjBg = true;
-    else if (px < w - 1 && visited[pos + 1]) adjBg = true;
-    else if (py > 0 && visited[pos - w]) adjBg = true;
-    else if (py < h - 1 && visited[pos + w]) adjBg = true;
-    else if (px > 0 && py > 0 && visited[pos - w - 1]) adjBg = true;
-    else if (px < w - 1 && py > 0 && visited[pos - w + 1]) adjBg = true;
-    else if (px > 0 && py < h - 1 && visited[pos + w - 1]) adjBg = true;
-    else if (px < w - 1 && py < h - 1 && visited[pos + w + 1]) adjBg = true;
-    if (adjBg) { halo[pos] = 1; ringQ.push(pos); }
-  }
-  // 第二圈：紧邻第一圈的光晕像素（4邻域即可，避免过度侵蚀主体）
-  while (ringQ.length) {
-    const pos = ringQ.pop();
-    const px = pos % w, py = (pos - px) / w;
-    if (px > 0) { const np = pos - 1; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
-    if (px < w - 1) { const np = pos + 1; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
-    if (py > 0) { const np = pos - w; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
-    if (py < h - 1) { const np = pos + w; if (!visited[np] && !halo[np] && isHaloLike(np * 4)) { halo[np] = 2; ringQ.push(np); } }
-  }
-  // 光晕像素：第一圈强淡化，第二圈弱淡化，并去白色污染
-  for (let pos = 0; pos < w * h; pos++) {
-    const hl = halo[pos];
-    if (hl === 0) continue;
-    const idx = pos * 4;
-    const s = bgScore(idx);
-    const lightT = clamp((s.light - 115) / (255 - 115), 0, 1);
-    const satT = clamp(1 - s.sat / 95, 0, 1);
-    const whiteScore = clamp(lightT * 0.8 + satT * 0.4, 0, 1);
-    const fade = hl === 1 ? 0.9 : 0.55;
-    d[idx + 3] = Math.round(d[idx + 3] * (1 - whiteScore * fade));
-    const keep = 1 - whiteScore * (hl === 1 ? 0.7 : 0.4);
-    d[idx] = Math.round(d[idx] * keep);
-    d[idx + 1] = Math.round(d[idx + 1] * keep);
-    d[idx + 2] = Math.round(d[idx + 2] * keep);
-  }
-
-  // ---- 第3步：抗锯齿半透明像素去污染 ----
-  for (let pos = 0; pos < w * h; pos++) {
-    const idx = pos * 4;
-    if (d[idx + 3] === 0 || d[idx + 3] === 255) continue;
-    const px = pos % w, py = (pos - px) / w;
-    let hasBgNeighbor = false;
-    if (px > 0 && visited[pos - 1]) hasBgNeighbor = true;
-    if (px < w - 1 && visited[pos + 1]) hasBgNeighbor = true;
-    if (py > 0 && visited[pos - w]) hasBgNeighbor = true;
-    if (py < h - 1 && visited[pos + w]) hasBgNeighbor = true;
-    if (hasBgNeighbor) {
-      const r = d[idx], g = d[idx + 1], b = d[idx + 2];
-      const factor = d[idx + 3] / 255;
-      const decontam = 0.4 * (1 - factor);
-      d[idx] = Math.round(r * (1 - decontam));
-      d[idx + 1] = Math.round(g * (1 - decontam));
-      d[idx + 2] = Math.round(b * (1 - decontam));
-    }
-  }
-
-  cx.putImageData(data, 0, 0);
-  SPRITES[key] = c;
+  SPRITES[key] = img;
 }
 function loadSprites(cb) {
   SPRITE_LIST.forEach(([key, src]) => {
@@ -1263,6 +1142,35 @@ function drawSkillButtons() {
       ctx.fillText(cd.toFixed(1), cx, cy);
       ctx.shadowBlur = 0;
     }
+
+    // 被动技能（激光/光球/光环）的激活-冷却状态显示
+    if (!isEmpty && !isUlt && enabled && sk) {
+      if (sk.cdTime !== undefined && sk.cdTime > 0) {
+        // 冷却中：显示冷却遮罩+倒计时（绿色，区别于手动CD的白色）
+        const ratio = sk.cdTime / sk.cdDur;
+        ctx.save();
+        ctx.fillStyle = 'rgba(5,16,8,0.78)';
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, r - 2, -Math.PI / 2, -Math.PI / 2 + TAU * ratio, false);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+        ctx.font = `bold ${Math.round(r * 0.5)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#5cffb0';
+        ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
+        ctx.fillText(sk.cdTime.toFixed(1), cx, cy);
+        ctx.shadowBlur = 0;
+      } else if (sk.activeTime !== undefined && sk.activeTime > 0) {
+        // 激活中：显示绿色边框脉冲 + 剩余时间小字
+        const ap = 0.5 + 0.5 * Math.sin(time * 6);
+        ctx.strokeStyle = `rgba(92,255,176,${0.5 + ap * 0.4})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(cx, cy, r + 3, 0, TAU); ctx.stroke();
+        ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#5cffb0';
+        ctx.fillText(sk.activeTime.toFixed(1), cx, cy + r - 18);
+      }
+    }
   }
 }
 
@@ -1407,6 +1315,7 @@ function drawBuffIndicators() {
   if (frenzyBuff > 0) buffs.push({ name: '狂暴', t: frenzyBuff, color: '#ff3a8a', icon: '⚡' });
   if (shieldBuff > 0) buffs.push({ name: '护盾', t: shieldBuff, color: '#5cffb0', icon: '🛡' });
   if (doubleXpBuff > 0) buffs.push({ name: '双倍经验', t: doubleXpBuff, color: '#8affd6', icon: '✦' });
+  if (magnetTimer > 0) buffs.push({ name: '磁铁', t: magnetTimer, color: '#4dd0ff', icon: '⩕' });
   if (buffs.length === 0) return;
   const ix = SAFE_L + 4, iy = H - SAFE_B - 40;
   for (let i = 0; i < buffs.length; i++) {
@@ -1773,16 +1682,17 @@ function resetGame() {
   player.trapDamageCd = 0; // 陷阱伤害独立冷却（不与敌人无敌共享）
   player.damageReduction = 0; player.xpMult = 1; player.facing = -Math.PI / 2;
   skills.bullet = { name: '暗夜弹', icon: '✦', lvl: 1, dmg: 12, cd: 0.7, timer: 0, count: 1, pierce: 0, speed: 460, spread: 0.12 };
-  skills.orbit = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, btnCd: 0, btnCdMax: 5.0 };
-  skills.aura = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, btnCd: 0, btnCdMax: 6.0 };
+  skills.orbit = { name: '护体光球', icon: '◉', lvl: 0, dmg: 8, count: 0, radius: 72, speed: 2.6, angle: 0, hitCd: {}, btnCd: 0, btnCdMax: 5.0, activeDur: 8, activeTime: 8, cdDur: 3, cdTime: 0 };
+  skills.aura = { name: '幽冥光环', icon: '◎', lvl: 0, dmg: 6, radius: 0, dps: 0, tick: 0, btnCd: 0, btnCdMax: 6.0, activeDur: 7, activeTime: 7, cdDur: 4, cdTime: 0 };
   skills.chain = { name: '闪电链', icon: '⚡', lvl: 0, dmg: 18, cd: 2.2, timer: 0, targets: 3, bounce: 2, btnCd: 0, btnCdMax: 8.0 };
   skills.frost = { name: '冰冻新星', icon: '❄', lvl: 0, dmg: 20, cd: 7.0, timer: 0, radius: 0, slowDur: 3, btnCd: 0, btnCdMax: 10.0 };
-  skills.laser = { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0, empower: 0, btnCd: 0, btnCdMax: 12.0 };
+  skills.laser = { name: '激光束', icon: '⟿', lvl: 0, dmg: 5, cd: 0, timer: 0, dps: 55, width: 12, angle: 0, sweep: 0.25, sweepPhase: 0, tickTimer: 0, empower: 0, btnCd: 0, btnCdMax: 12.0, activeDur: 6, activeTime: 6, cdDur: 4, cdTime: 0 };
   skills.boomerang = { name: '回旋镖', icon: '✧', lvl: 0, dmg: 16, cd: 1.6, timer: 0, count: 1, pierce: 4, speed: 320, btnCd: 0, btnCdMax: 8.0 };
   skills.ult = { name: '终极爆发', icon: '✺', lvl: 0, cdMax: 45, cd: 0, dmg: 200, radius: 260 };
   unlockedSkills = []; // 重置已解锁技能列表
   ultUnlocked = false; // 终极技能重置为未解锁
   firstBookGuaranteed = false; // 首个精英必掉技能书（保证早期拿到第一个技能）
+  magnetTimer = 0; // 重置磁铁效果
   // 重置随机事件状态
   eventTimer = rand(45, 60); activeEvent = null; eventBannerTimer = 0;
   frenzyBuff = 0; shieldBuff = 0; doubleXpBuff = 0;
@@ -2129,26 +2039,48 @@ function update(dt) {
       }
     }
   }
-  // 2.护体光球
+  // 2.护体光球（激活8秒→冷却3秒循环，冷却时光球消失）
   const o = skills.orbit;
   if (o.count > 0) {
-    o.angle += o.speed * dt;
-    for (let i = 0; i < enemies.length; i++) { const e = enemies[i];
-      for (let k = 0; k < o.count; k++) {
+    // 激活-冷却循环
+    if (o.activeTime > 0) {
+      o.activeTime -= dt;
+      if (o.activeTime <= 0) { o.activeTime = 0; o.cdTime = o.cdDur; }
+    } else if (o.cdTime > 0) {
+      o.cdTime -= dt;
+      if (o.cdTime <= 0) { o.cdTime = 0; o.activeTime = o.activeDur; spawnParticles(player.x, player.y, '#5cffb0', 12, 180); }
+    }
+    // 冷却期间光球不生效，仅激活时造成伤害
+    if (o.cdTime <= 0) {
+      o.angle += o.speed * dt;
+      for (let i = 0; i < enemies.length; i++) { const e = enemies[i];
+        for (let k = 0; k < o.count; k++) {
+          const a = o.angle + (k / o.count) * TAU; const ox = player.x + Math.cos(a) * o.radius, oy = player.y + Math.sin(a) * o.radius;
+          if (dist2(ox, oy, e.x, e.y) < (12 + e.r) ** 2) { const key = i + '_' + k; if (!o.hitCd[key] || o.hitCd[key] <= 0) { damageEnemy(e, o.dmg, i); o.hitCd[key] = 0.5; } } } }
+      if (boss) for (let k = 0; k < o.count; k++) {
         const a = o.angle + (k / o.count) * TAU; const ox = player.x + Math.cos(a) * o.radius, oy = player.y + Math.sin(a) * o.radius;
-        if (dist2(ox, oy, e.x, e.y) < (12 + e.r) ** 2) { const key = i + '_' + k; if (!o.hitCd[key] || o.hitCd[key] <= 0) { damageEnemy(e, o.dmg, i); o.hitCd[key] = 0.5; } } } }
-    if (boss) for (let k = 0; k < o.count; k++) {
-      const a = o.angle + (k / o.count) * TAU; const ox = player.x + Math.cos(a) * o.radius, oy = player.y + Math.sin(a) * o.radius;
-      if (dist2(ox, oy, boss.x, boss.y) < (12 + boss.r) ** 2) { const key = 'B_' + k; if (!o.hitCd[key] || o.hitCd[key] <= 0) { damageBoss(o.dmg * 0.6); o.hitCd[key] = 0.5; } } }
-    for (const k in o.hitCd) { o.hitCd[k] -= dt; if (o.hitCd[k] <= 0) delete o.hitCd[k]; }
+        if (dist2(ox, oy, boss.x, boss.y) < (12 + boss.r) ** 2) { const key = 'B_' + k; if (!o.hitCd[key] || o.hitCd[key] <= 0) { damageBoss(o.dmg * 0.6); o.hitCd[key] = 0.5; } } }
+      for (const k in o.hitCd) { o.hitCd[k] -= dt; if (o.hitCd[k] <= 0) delete o.hitCd[k]; }
+    }
   }
-  // 3.光环
+  // 3.光环（激活7秒→冷却4秒循环，冷却时光环关闭）
   const au = skills.aura;
   if (au.radius > 0) {
-    au.tick -= dt;
-    if (au.tick <= 0) { au.tick = 0.4; const r2 = au.radius * au.radius;
-      for (let i = 0; i < enemies.length; i++) { const e = enemies[i]; if (dist2(e.x, e.y, player.x, player.y) < r2) damageEnemy(e, au.dps * 0.4, i, false); }
-      if (boss && dist2(boss.x, boss.y, player.x, player.y) < r2) damageBoss(au.dps * 0.4); }
+    // 激活-冷却循环
+    if (au.activeTime > 0) {
+      au.activeTime -= dt;
+      if (au.activeTime <= 0) { au.activeTime = 0; au.cdTime = au.cdDur; }
+    } else if (au.cdTime > 0) {
+      au.cdTime -= dt;
+      if (au.cdTime <= 0) { au.cdTime = 0; au.activeTime = au.activeDur; spawnParticles(player.x, player.y, '#c08bff', 12, 180); }
+    }
+    // 冷却期间光环不生效
+    if (au.cdTime <= 0) {
+      au.tick -= dt;
+      if (au.tick <= 0) { au.tick = 0.4; const r2 = au.radius * au.radius;
+        for (let i = 0; i < enemies.length; i++) { const e = enemies[i]; if (dist2(e.x, e.y, player.x, player.y) < r2) damageEnemy(e, au.dps * 0.4, i, false); }
+        if (boss && dist2(boss.x, boss.y, player.x, player.y) < r2) damageBoss(au.dps * 0.4); }
+    }
   }
   // 4.闪电链
   const ch = skills.chain;
@@ -2186,34 +2118,45 @@ function update(dt) {
       spawnParticles(player.x, player.y, '#9fd6ff', 26, 220); Audio.frost();
     }
   }
-  // 6.激光（自动锁定+扇形扫射，无需操作即可覆盖敌群）
+  // 6.激光（激活6秒→冷却4秒循环，冷却时激光停止）
   const la = skills.laser;
   if (la.lvl > 0) {
-    const reach = 640;
-    const tgt = findClosestEnemy(player.x, player.y);
-    let targetAng = tgt ? Math.atan2(tgt.y - player.y, tgt.x - player.x) : player.facing;
-    // 自动扫射：在主目标周围扇形来回扫，覆盖更多敌人（范围随等级增长）
-    la.sweepPhase = (la.sweepPhase || 0) + dt * 5;
-    const sweepRange = Math.min(0.55, 0.10 + la.lvl * 0.11); // lvl1:0.21 → lvl5:0.55
-    targetAng += Math.sin(la.sweepPhase) * sweepRange;
-    // 快速跟踪（原 dt*4 太迟钝，提速到 dt*11，几乎瞬跟）
-    let d = targetAng - la.angle; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
-    la.angle += d * Math.min(1, dt * 11);
-    la.tickTimer -= dt;
-    if (la.tickTimer <= 0) { la.tickTimer = 0.08;
-      const cx = player.x, cy = player.y, a = la.angle;
-      const endX = cx + Math.cos(a) * reach, endY = cy + Math.sin(a) * reach;
-      const empowered = la.empower > 0;
-      const effW = la.width * (empowered ? 1.8 : 1);
-      const halfW = effW / 2;
-      const dmgMult = empowered ? 2.0 : 1.0;
-      for (let i = 0; i < enemies.length; i++) {
-        const e = enemies[i];
-        if (pointToSegDist(e.x, e.y, cx, cy, endX, endY) < halfW + e.r) damageEnemy(e, la.dps * 0.08 * dmgMult, i, false);
-      }
-      if (boss && pointToSegDist(boss.x, boss.y, cx, cy, endX, endY) < halfW + boss.r) damageBoss(la.dps * 0.06 * dmgMult);
+    // 激活-冷却循环
+    if (la.activeTime > 0) {
+      la.activeTime -= dt;
+      if (la.activeTime <= 0) { la.activeTime = 0; la.cdTime = la.cdDur; }
+    } else if (la.cdTime > 0) {
+      la.cdTime -= dt;
+      if (la.cdTime <= 0) { la.cdTime = 0; la.activeTime = la.activeDur; spawnParticles(player.x, player.y, '#ff5c8a', 12, 180); }
     }
-    lasers.push({ x1: player.x, y1: player.y, a: la.angle, w: la.width * (la.empower > 0 ? 1.8 : 1), life: 0.06, max: 0.06 });
+    // 冷却期间激光不生效
+    if (la.cdTime <= 0) {
+      const reach = 640;
+      const tgt = findClosestEnemy(player.x, player.y);
+      let targetAng = tgt ? Math.atan2(tgt.y - player.y, tgt.x - player.x) : player.facing;
+      // 自动扫射：在主目标周围扇形来回扫，覆盖更多敌人（范围随等级增长）
+      la.sweepPhase = (la.sweepPhase || 0) + dt * 5;
+      const sweepRange = Math.min(0.55, 0.10 + la.lvl * 0.11);
+      targetAng += Math.sin(la.sweepPhase) * sweepRange;
+      // 快速跟踪
+      let d = targetAng - la.angle; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
+      la.angle += d * Math.min(1, dt * 11);
+      la.tickTimer -= dt;
+      if (la.tickTimer <= 0) { la.tickTimer = 0.08;
+        const cx = player.x, cy = player.y, a = la.angle;
+        const endX = cx + Math.cos(a) * reach, endY = cy + Math.sin(a) * reach;
+        const empowered = la.empower > 0;
+        const effW = la.width * (empowered ? 1.8 : 1);
+        const halfW = effW / 2;
+        const dmgMult = empowered ? 2.0 : 1.0;
+        for (let i = 0; i < enemies.length; i++) {
+          const e = enemies[i];
+          if (pointToSegDist(e.x, e.y, cx, cy, endX, endY) < halfW + e.r) damageEnemy(e, la.dps * 0.08 * dmgMult, i, false);
+        }
+        if (boss && pointToSegDist(boss.x, boss.y, cx, cy, endX, endY) < halfW + boss.r) damageBoss(la.dps * 0.06 * dmgMult);
+      }
+      lasers.push({ x1: player.x, y1: player.y, a: la.angle, w: la.width * (la.empower > 0 ? 1.8 : 1), life: 0.06, max: 0.06 });
+    }
   }
   // 7.回旋镖
   const bm = skills.boomerang;
@@ -2356,9 +2299,12 @@ function update(dt) {
     }
   }
   // 宝石
+  if (magnetTimer > 0) magnetTimer = Math.max(0, magnetTimer - dt); // 衰减磁铁效果
   for (let i = gems.length - 1; i >= 0; i--) { const g = gems[i]; g.life -= dt;
     if (g.life <= 0) { gems.splice(i, 1); continue; }
     const d2 = dist2(g.x, g.y, player.x, player.y); const pr = player.pickupRange;
+    // 磁铁效果期间持续吸取（对新生成的宝石也生效）
+    if (magnetTimer > 0) g.pull = true;
     if (g.pull || d2 < pr * pr) { g.pull = true; const ang = Math.atan2(player.y - g.y, player.x - g.x);
       g.x += Math.cos(ang) * 260 * dt; g.y += Math.sin(ang) * 260 * dt; }
     else { g.x += g.vx * dt; g.y += g.vy * dt; g.vx *= 0.92; g.vy *= 0.92; }
@@ -2479,7 +2425,7 @@ function killEnemy(e, idx) {
 function applyPickup(p) {
   floatText(player.x, player.y - 20, p.name, p.color); spawnParticles(p.x, p.y, p.color, 16, 220); Audio.pickup();
   if (p.kind === 'heal') player.hp = Math.min(player.maxHp, player.hp + 40);
-  else if (p.kind === 'magnet') for (const g of gems) g.pull = true;
+  else if (p.kind === 'magnet') { magnetTimer = 8; for (const g of gems) g.pull = true; floatText(player.x, player.y - 40, '磁铁 8秒', '#4dd0ff'); }
   else if (p.kind === 'bomb') { cam.shake = 14; for (let i = enemies.length - 1; i >= 0; i--) damageEnemy(enemies[i], 40 + time * 0.5, i);
     if (boss) damageBoss(40 + time * 0.5); spawnParticles(player.x, player.y, '#ffaa33', 30, 300); Audio.ult(); }
   else if (p.kind === 'chest') for (let i = 0; i < 6; i++) spawnGem(player.x + rand(-20, 20), player.y + rand(-20, 20), 2);
