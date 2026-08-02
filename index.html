@@ -48,6 +48,21 @@
   <p>旋转手机以获得最佳体验</p>
 </div>
 
+<!-- 昵称输入浮层 -->
+<div id="nameInputOverlay" style="display:none; position:fixed; inset:0; z-index:998; background:rgba(4,6,14,0.85); align-items:center; justify-content:center; font-family:-apple-system,'PingFang SC',sans-serif;">
+  <div style="background:linear-gradient(180deg,#1a2238,#0e1424); border:1px solid rgba(77,208,255,0.4); border-radius:14px; padding:24px 22px; width:min(360px,86vw); box-shadow:0 0 32px rgba(77,208,255,0.25);">
+    <div style="font-size:18px; font-weight:600; color:#8affd6; text-align:center; margin-bottom:6px; letter-spacing:0.1em;">修改昵称</div>
+    <div style="font-size:11px; color:#8a93a6; text-align:center; margin-bottom:18px;">将显示在全国排行榜上（最多12字）</div>
+    <input id="nameInputField" type="text" maxlength="12" placeholder="输入你的昵称"
+      onkeydown="if(event.key==='Enter'){confirmNameInput();}else if(event.key==='Escape'){cancelNameInput();}"
+      style="width:100%; box-sizing:border-box; padding:12px 14px; font-size:16px; color:#e8ecf3; background:rgba(8,12,24,0.9); border:1px solid rgba(77,208,255,0.3); border-radius:8px; outline:none;" />
+    <div style="display:flex; gap:12px; margin-top:18px;">
+      <button onclick="cancelNameInput()" style="flex:1; padding:11px; font-size:15px; color:#9aa6b8; background:rgba(40,48,68,0.6); border:1px solid rgba(120,130,150,0.3); border-radius:8px; cursor:pointer;">取消</button>
+      <button onclick="confirmNameInput()" style="flex:1; padding:11px; font-size:15px; color:#04101a; font-weight:600; background:linear-gradient(90deg,#4dd0ff,#8affd6); border:none; border-radius:8px; cursor:pointer;">确认</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 // ===== 横屏检测 =====

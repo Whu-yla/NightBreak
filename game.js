@@ -478,45 +478,114 @@ function comboKill(x, y) {
   }
 }
 
-// ========== 分享 ==========
+// ========== 分享（H5 Web Share API + 复制链接 fallback） ==========
 function shareScore() {
   const m = Math.floor(time / 60), s = Math.floor(time % 60);
   const shareText = `我在暗夜突围中存活了${m}分${s}秒，到达Lv.${player.level}，击杀${player.kills}个敌人！你能超过我吗？`;
-  if (wx.shareAppMessage) wx.shareAppMessage({ title: shareText, imageUrl: '' });
+  const shareUrl = location.href;
+  // 优先用原生分享面板（微信浏览器/系统分享）
+  if (navigator.share) {
+    navigator.share({ title: '暗夜突围 NightBreak', text: shareText, url: shareUrl }).catch(() => {});
+    return;
+  }
+  // 回退：复制链接 + 文案到剪贴板，弹出提示
+  const full = shareText + '\n' + shareUrl;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(full).then(
+      () => floatCenterToast('已复制战绩，去粘贴分享吧！'),
+      () => floatCenterToast('分享链接：' + shareUrl)
+    );
+  } else {
+    // 旧浏览器兜底
+    const ta = document.createElement('textarea'); ta.value = full;
+    ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand('copy'); floatCenterToast('已复制战绩，去粘贴分享吧！'); } catch (e) { floatCenterToast('分享链接：' + shareUrl); }
+    document.body.removeChild(ta);
+  }
 }
+// 屏幕中央临时提示（分享等用）
+let centerToastText = '', centerToastTimer = 0;
+function floatCenterToast(msg) { centerToastText = msg; centerToastTimer = 2.5; }
 
-// ========== 排行榜 ==========
-const RANK_KEY = 'nightbreak_rank_v1';
+// ========== 排行榜（H5 + 服务器后端） ==========
+// 排行榜后端地址（部署到 https://www.szkj.site）
+const RANK_API = 'https://www.szkj.site/api/rank';
+const SUBMIT_TOKEN = 'nightbreak-2024-secret'; // 与 server.js 中 SUBMIT_SECRET 保持一致
 const NAME_KEY = 'nightbreak_player_name';
-// 启动时静默登录，生成默认昵称（微信小游戏无后端，无法换 openid，用本地昵称）
 let playerName = '';
+// 榜单缓存：{ list, loading, loadedAt, error }
+let rankCache = { list: [], loading: false, loadedAt: 0, error: '' };
+const RANK_CACHE_TTL = 15; // 缓存有效期（秒），超过则下次读触发刷新
+
+// 启动时读取本地昵称，没有则生成默认昵称
 function ensureLogin() {
-  try { wx.login({ success: () => {} }); } catch (e) {}
   playerName = wx.getStorageSync(NAME_KEY) || '';
   if (!playerName) {
-    // 生成"指挥官+4位"默认昵称
     const suffix = String(Math.floor(1000 + Math.random() * 9000));
     playerName = '指挥官' + suffix;
     wx.setStorageSync(NAME_KEY, playerName);
   }
 }
-function loadRank() { try { return JSON.parse(wx.getStorageSync(RANK_KEY) || '[]'); } catch (e) { return []; } }
-function saveRank(list) { try { wx.setStorageSync(RANK_KEY, JSON.stringify(list.slice(0, 20))); } catch (e) {} }
-function calcScore() { return player.level * 1000 + player.kills * 50 + Math.floor(time); }
-// 自动提交：每个昵称只保留最高分
-function submitScore() {
-  const list = loadRank();
-  const score = calcScore();
-  const entry = { id: playerName, score, level: player.level, kills: player.kills, time: Math.floor(time), wave, date: Date.now() };
-  const existIdx = list.findIndex(e => e.id === playerName);
-  if (existIdx >= 0) {
-    if (score > list[existIdx].score) list[existIdx] = entry; // 刷新最高分
-  } else {
-    list.push(entry);
-  }
-  list.sort((a, b) => b.score - a.score); saveRank(list);
-  return entry;
+function setPlayerName(name) {
+  playerName = (name || '').trim().slice(0, 12) || playerName;
+  wx.setStorageSync(NAME_KEY, playerName);
 }
+function calcScore() { return player.level * 1000 + player.kills * 50 + Math.floor(time); }
+
+// 同步读取榜单（返回缓存，过期或为空时在后台异步刷新）
+function loadRank() {
+  if (!rankCache.loading && (rankCache.list.length === 0 || time - rankCache.loadedAt > RANK_CACHE_TTL)) {
+    fetchRank();
+  }
+  return rankCache.list;
+}
+// 异步从服务器拉取榜单
+function fetchRank() {
+  if (rankCache.loading) return;
+  rankCache.loading = true; rankCache.error = '';
+  const reqUrl = RANK_API + '/top?limit=50&_=' + Date.now();
+  fetch(reqUrl).then(r => r.json()).then(data => {
+    rankCache.loading = false;
+    if (data && data.ok && Array.isArray(data.list)) {
+      rankCache.list = data.list;
+      rankCache.loadedAt = time;
+    } else {
+      rankCache.error = (data && data.error) || '榜单加载失败';
+    }
+  }).catch(e => { rankCache.loading = false; rankCache.error = '网络错误'; });
+}
+
+// 提交状态：'idle' | 'submitting' | 'done' | 'fail'
+let goSubmitState = 'idle';
+let goSubmitInfo = null; // { rank, best } 提交成功后的名次信息
+// 异步提交分数到服务器
+function submitScore() {
+  const score = calcScore();
+  const entry = { name: playerName, score, level: player.level, kills: player.kills, time: Math.floor(time), wave, token: SUBMIT_TOKEN };
+  goSubmitState = 'submitting'; goSubmitInfo = null;
+  goRankEntry = { id: playerName, score, level: player.level, kills: player.kills, time: Math.floor(time), wave, date: Date.now() };
+  fetch(RANK_API + '/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entry),
+  }).then(r => r.json()).then(data => {
+    if (data && data.ok) {
+      goSubmitState = 'done';
+      goSubmitInfo = { rank: data.rank, best: data.best };
+      rankCache.loadedAt = -999; // 失效缓存，下次读会刷新
+      fetchRank(); // 立即刷新榜单
+    } else {
+      goSubmitState = 'fail';
+      goSubmitInfo = { error: (data && data.error) || '提交失败' };
+    }
+  }).catch(e => {
+    goSubmitState = 'fail';
+    goSubmitInfo = { error: '网络错误' };
+  });
+  return goRankEntry;
+}
+// 手动重试提交
+function retrySubmitScore() { if (goSubmitState === 'fail' || goSubmitState === 'idle') submitScore(); }
 
 // ========== 游戏数据 ==========
 let enemies = [], bullets = [], particles = [], gems = [], pickups = [], floats = [];
@@ -683,7 +752,6 @@ let levelUpChoices = [];
 let levelUpCardRects = [];
 
 // 结算界面状态
-let goSubmitted = false;
 let goRankEntry = null;
 
 // 排行榜界面
@@ -692,6 +760,9 @@ let showRankFromStart = false;
 // 触控处理
 function onTouchStart(e) {
   Audio.resume(); // 首次触摸恢复音频上下文（微信限制）
+  // 昵称输入浮层显示时，忽略游戏触摸（交由 DOM 浮层处理）
+  const overlay = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('nameInputOverlay') : null;
+  if (overlay && overlay.style.display !== 'none') return;
   for (const t of e.changedTouches) {
     const x = t.clientX, y = t.clientY;
     handleTouchStart(x, y, t.identifier);
@@ -777,33 +848,74 @@ wx.onTouchCancel(onTouchEnd);
 
 function handleStartTouch(x, y) {
   const btnW = IS_LANDSCAPE ? W * 0.32 : W * 0.7;
-  const btnH = 58;
-  const btnGap = 18;
-  const totalBtnH = btnH * 2 + btnGap;
+  const btnH = 52;
+  const btnGap = 14;
+  const nameH = 34;
+  const totalBtnH = nameH + btnH * 3 + btnGap * 2;
   const btnRightX = IS_LANDSCAPE ? W * 0.62 : (W - btnW) / 2;
-  const btnStartY = H / 2 - totalBtnH / 2;
-  // 开始按钮
-  if (ptInRect(x, y, btnRightX, btnStartY, btnW, btnH)) {
+  const nameY = H / 2 - totalBtnH / 2;
+  // 昵称行（点击修改）
+  if (ptInRect(x, y, btnRightX, nameY, btnW, nameH)) { showNameInput(); return; }
+  const b1Y = nameY + nameH;
+  // 开始突围
+  if (ptInRect(x, y, btnRightX, b1Y, btnW, btnH)) {
     resetGame(); state = STATE.PLAY; Audio.bgmStart(); return;
   }
-  // 排行榜按钮
-  if (ptInRect(x, y, btnRightX, btnStartY + btnH + btnGap, btnW, btnH)) {
-    showRankFromStart = true; return;
+  // 排行榜
+  if (ptInRect(x, y, btnRightX, b1Y + btnH + btnGap, btnW, btnH)) {
+    showRankFromStart = true; fetchRank(); return;
   }
+  // 修改昵称
+  if (ptInRect(x, y, btnRightX, b1Y + (btnH + btnGap) * 2, btnW, btnH)) {
+    showNameInput(); return;
+  }
+}
+// 弹出昵称输入浮层（DOM input，定位在 canvas 上方）
+function showNameInput() {
+  if (typeof document === 'undefined' || !document.getElementById) return;
+  const overlay = document.getElementById('nameInputOverlay');
+  if (!overlay) return;
+  const input = document.getElementById('nameInputField');
+  if (input) input.value = playerName;
+  overlay.style.display = 'flex';
+  if (input) setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+function confirmNameInput() {
+  const overlay = document.getElementById('nameInputOverlay');
+  const input = document.getElementById('nameInputField');
+  if (overlay) overlay.style.display = 'none';
+  if (input) setPlayerName(input.value);
+}
+function cancelNameInput() {
+  const overlay = document.getElementById('nameInputOverlay');
+  if (overlay) overlay.style.display = 'none';
 }
 function handleRankClose(x, y) {
-  const btnW = W * 0.4, btnH = 42;
-  if (ptInRect(x, y, (W - btnW) / 2, H * 0.85, btnW, btnH)) showRankFromStart = false;
+  const btnW = W * 0.28, btnH = 42, btnGap = 10;
+  const btnsTotalW = btnW * 2 + btnGap;
+  const bx0 = (W - btnsTotalW) / 2;
+  // 刷新榜单
+  if (ptInRect(x, y, bx0, H * 0.85, btnW, btnH)) { rankCache.loadedAt = -999; fetchRank(); return; }
+  // 返回
+  if (ptInRect(x, y, bx0 + btnW + btnGap, H * 0.85, btnW, btnH)) showRankFromStart = false;
 }
 function handleOverTouch(x, y) {
-  const btnW = W * 0.4, btnH = 46;
-  const btnY = H * 0.82;
+  const btnW = W * 0.28, btnH = 44, btnGap = 10, btnY = H * 0.82;
+  const totalBtns = goSubmitState === 'fail' ? 3 : 2;
+  const btnsTotalW = btnW * totalBtns + btnGap * (totalBtns - 1);
+  let bx = (W - btnsTotalW) / 2;
   // 再次突围
-  if (ptInRect(x, y, (W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH)) {
+  if (ptInRect(x, y, bx, btnY, btnW, btnH)) {
     resetGame(); state = STATE.PLAY; Audio.bgmStart(); return;
   }
-  // 分享战绩
-  if (ptInRect(x, y, (W - btnW) / 2 + btnW / 2 + 6, btnY, btnW, btnH)) {
+  bx += btnW + btnGap;
+  // 重试上传（仅失败时出现，位于中间）
+  if (goSubmitState === 'fail') {
+    if (ptInRect(x, y, bx, btnY, btnW, btnH)) { retrySubmitScore(); return; }
+    bx += btnW + btnGap;
+  }
+  // 分享战绩（最后一个）
+  if (ptInRect(x, y, bx, btnY, btnW, btnH)) {
     shareScore(); return;
   }
 }
@@ -1384,15 +1496,28 @@ function drawStartScreen() {
   ly += 8;
   ctx.fillText('左下摇杆移动 · 右下技能按钮释放', dx, ly);
 
-  // 右侧：两个大按钮（竖排，横屏右半区居中）
+  // 右侧：昵称显示 + 三个按钮（竖排，横屏右半区居中）
   const btnW = IS_LANDSCAPE ? W * 0.32 : W * 0.7;
-  const btnH = 58;
-  const btnGap = 18;
-  const totalBtnH = btnH * 2 + btnGap;
+  const btnH = 52;
+  const btnGap = 14;
+  const nameH = 34; // 昵称行高度
+  const totalBtnH = nameH + btnH * 3 + btnGap * 2;
   const btnRightX = IS_LANDSCAPE ? W * 0.62 : (W - btnW) / 2;
   const btnStartY = H / 2 - totalBtnH / 2;
-  drawGradientBtn(btnRightX, btnStartY, btnW, btnH, '开 始 突 围', '#4dd0ff', '#8affd6', 20);
-  drawGradientBtn(btnRightX, btnStartY + btnH + btnGap, btnW, btnH, '排  行  榜', '#b066ff', '#4dd0ff', 18);
+  // 昵称行（点击可修改）
+  const nameY = btnStartY;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a6';
+  ctx.fillText('指挥官', btnRightX, nameY + nameH / 2 - 9);
+  ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#4dd0ff';
+  ctx.fillText(playerName, btnRightX + 52, nameY + nameH / 2 - 6);
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#5a6478';
+  ctx.textAlign = 'right';
+  ctx.fillText('点击修改 ›', btnRightX + btnW, nameY + nameH / 2 - 6);
+  // 三个按钮
+  drawGradientBtn(btnRightX, nameY + nameH, btnW, btnH, '开 始 突 围', '#4dd0ff', '#8affd6', 19);
+  drawGradientBtn(btnRightX, nameY + nameH + btnH + btnGap, btnW, btnH, '排  行  榜', '#b066ff', '#4dd0ff', 17);
+  drawGradientBtn(btnRightX, nameY + nameH + (btnH + btnGap) * 2, btnW, btnH, '修 改 昵 称', '#9d3aff', '#b066ff', 15);
 }
 
 function drawLevelUpScreen() {
@@ -1513,35 +1638,60 @@ function drawOverScreen() {
     ctx.fillText(v, leftX + 90, sy);
     sy += 22;
   }
-  // 右：英雄榜（自动已提交）
+  // 右：英雄榜（异步提交到服务器）
   ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#8affd6';
   ctx.fillText('暗 夜 英 雄 榜', rightX, H * 0.20);
+  // 提交状态行
+  let statusY = H * 0.20 + 16;
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  if (goSubmitState === 'submitting') {
+    ctx.fillStyle = '#8a93a6'; ctx.fillText('正在上传战绩...', rightX, statusY);
+  } else if (goSubmitState === 'done' && goSubmitInfo) {
+    ctx.fillStyle = goSubmitInfo.best ? '#8affd6' : '#9aa6b8';
+    ctx.fillText(goSubmitInfo.best ? ('✓ 新纪录！全国第 ' + goSubmitInfo.rank + ' 名') : ('已上榜，全国第 ' + goSubmitInfo.rank + ' 名'), rightX, statusY);
+  } else if (goSubmitState === 'fail' && goSubmitInfo) {
+    ctx.fillStyle = '#ff6b8a'; ctx.fillText('✗ ' + goSubmitInfo.error + '（点下方重试）', rightX, statusY);
+  }
   const list = loadRank();
-  const myRankIdx = goRankEntry ? list.findIndex(e => e.id === goRankEntry.id && e.score === goRankEntry.score && e.date === goRankEntry.date) : -1;
-  let ry = H * 0.24;
+  const myName = goRankEntry ? goRankEntry.id : '';
+  const myRankIdx = list.findIndex(e => (e.name || e.id) === myName);
+  let ry = statusY + 12;
   const showCount = Math.min(6, list.length);
-  for (let i = 0; i < showCount; i++) {
-    const r = list[i];
-    const isMe = i === myRankIdx;
-    ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillStyle = isMe ? '#4dd0ff' : (i === 0 ? '#ffe27a' : i < 3 ? '#cd9b4a' : '#9aa6b8');
-    ctx.fillText((i + 1) + '. ' + r.id, rightX, ry);
-    ctx.textAlign = 'right';
-    ctx.fillText(String(r.score) + ' (Lv.' + r.level + ')', rightX + colW, ry);
-    ry += 18;
+  if (list.length === 0 && rankCache.loading) {
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#5a6478'; ctx.textAlign = 'left';
+    ctx.fillText('加载榜单中...', rightX, ry);
+  } else if (list.length === 0 && rankCache.error) {
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#ff6b8a'; ctx.textAlign = 'left';
+    ctx.fillText(rankCache.error, rightX, ry);
+  } else {
+    for (let i = 0; i < showCount; i++) {
+      const r = list[i];
+      const isMe = i === myRankIdx;
+      ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillStyle = isMe ? '#4dd0ff' : (i === 0 ? '#ffe27a' : i < 3 ? '#cd9b4a' : '#9aa6b8');
+      ctx.fillText((i + 1) + '. ' + (r.name || r.id), rightX, ry);
+      ctx.textAlign = 'right';
+      ctx.fillText(String(r.score) + ' (Lv.' + r.level + ')', rightX + colW, ry);
+      ry += 18;
+    }
+    // 若自己不在前6，单独显示自己的名次
+    if (myRankIdx >= 6) {
+      ry += 6;
+      ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#4dd0ff';
+      ctx.fillText((myRankIdx + 1) + '. ' + (goRankEntry ? goRankEntry.id : '') + ' (你)', rightX, ry);
+      ctx.textAlign = 'right';
+      ctx.fillText(goRankEntry ? (String(goRankEntry.score) + ' (Lv.' + goRankEntry.level + ')') : '', rightX + colW, ry);
+    }
   }
-  // 若自己不在前6，单独显示自己的名次
-  if (myRankIdx >= 6) {
-    ry += 6;
-    ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#4dd0ff';
-    ctx.fillText((myRankIdx + 1) + '. ' + goRankEntry.id + ' (你)', rightX, ry);
-    ctx.textAlign = 'right';
-    ctx.fillText(String(goRankEntry.score) + ' (Lv.' + goRankEntry.level + ')', rightX + colW, ry);
-  }
-  // 按钮
-  const btnY = H * 0.82, btnW = W * 0.4, btnH = 46;
-  drawGradientBtn((W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH, '再次突围', '#4dd0ff', '#8affd6', 16);
-  drawGradientBtn((W - btnW) / 2 + btnW / 2 + 6, btnY, btnW, btnH, '分享战绩', '#b066ff', '#4dd0ff', 16);
+  // 按钮（失败时第三个按钮变为"重试上传"）
+  const btnY = H * 0.82, btnW = W * 0.28, btnH = 44;
+  const totalBtns = goSubmitState === 'fail' ? 3 : 2;
+  const btnGap = 10;
+  const btnsTotalW = btnW * totalBtns + btnGap * (totalBtns - 1);
+  let bx = (W - btnsTotalW) / 2;
+  drawGradientBtn(bx, btnY, btnW, btnH, '再次突围', '#4dd0ff', '#8affd6', 15); bx += btnW + btnGap;
+  if (goSubmitState === 'fail') { drawGradientBtn(bx, btnY, btnW, btnH, '重试上传', '#ff8a3a', '#ffe27a', 15); bx += btnW + btnGap; }
+  drawGradientBtn(bx, btnY, btnW, btnH, '分享战绩', '#b066ff', '#4dd0ff', 15);
 }
 
 function drawPauseScreen() {
@@ -1566,18 +1716,21 @@ function drawRankScreen() {
   const list = loadRank();
   if (list.length === 0) {
     ctx.font = '14px sans-serif'; ctx.fillStyle = '#5a6478';
-    ctx.fillText('暂无记录，快来成为第一位上榜者！', W / 2, H * 0.4);
+    if (rankCache.loading) ctx.fillText('正在从服务器加载榜单...', W / 2, H * 0.4);
+    else if (rankCache.error) { ctx.fillStyle = '#ff6b8a'; ctx.fillText('加载失败：' + rankCache.error, W / 2, H * 0.4); }
+    else ctx.fillText('暂无记录，快来成为第一位上榜者！', W / 2, H * 0.4);
   } else {
     let ry = H * 0.20;
     for (let i = 0; i < Math.min(list.length, 15); i++) {
       const r = list[i];
+      const isMe = (r.name || r.id) === playerName;
       const medal = i === 0 ? '#ffe27a' : i === 1 ? '#c8d0dc' : i === 2 ? '#cd7f4a' : '#9aa6b8';
       ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillStyle = medal;
+      ctx.fillStyle = isMe ? '#4dd0ff' : medal;
       ctx.fillText(String(i + 1), W * 0.12, ry);
-      ctx.font = '13px sans-serif'; ctx.fillStyle = '#e8ecf3';
-      ctx.fillText(r.id, W * 0.18, ry);
-      ctx.textAlign = 'right'; ctx.fillStyle = '#ffe27a';
+      ctx.font = '13px sans-serif'; ctx.fillStyle = isMe ? '#4dd0ff' : '#e8ecf3';
+      ctx.fillText((r.name || r.id) + (isMe ? ' (你)' : ''), W * 0.18, ry);
+      ctx.textAlign = 'right'; ctx.fillStyle = isMe ? '#4dd0ff' : '#ffe27a';
       ctx.fillText(String(r.score), W * 0.68, ry);
       const rm = Math.floor(r.time / 60), rs = r.time % 60;
       ctx.font = '11px sans-serif'; ctx.fillStyle = '#8a93a6';
@@ -1585,8 +1738,12 @@ function drawRankScreen() {
       ry += 22;
     }
   }
-  const btnW = W * 0.4, btnH = 42;
-  drawGradientBtn((W - btnW) / 2, H * 0.85, btnW, btnH, '返回', '#4dd0ff', '#8affd6');
+  // 两个按钮：刷新 / 返回
+  const btnW = W * 0.28, btnH = 42, btnGap = 10;
+  const btnsTotalW = btnW * 2 + btnGap;
+  const bx0 = (W - btnsTotalW) / 2;
+  drawGradientBtn(bx0, H * 0.85, btnW, btnH, rankCache.loading ? '加载中...' : '刷新榜单', '#8affd6', '#4dd0ff', 14);
+  drawGradientBtn(bx0 + btnW + btnGap, H * 0.85, btnW, btnH, '返回', '#b066ff', '#4dd0ff', 14);
 }
 
 function drawUI() {
@@ -1612,6 +1769,19 @@ function drawUI() {
   if (eventBannerTimer > 0 && state === STATE.PLAY) drawEventBanner();
   if (state === STATE.OVER) drawOverScreen();
   if (state === STATE.PAUSE) drawPauseScreen();
+  // 中央临时提示（分享复制等）
+  if (centerToastTimer > 0) {
+    const alpha = Math.min(1, centerToastTimer / 0.5);
+    ctx.save();
+    ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(centerToastText).width + 40;
+    ctx.fillStyle = `rgba(8,12,24,${0.85 * alpha})`;
+    ctx.strokeStyle = `rgba(77,208,255,${0.5 * alpha})`; ctx.lineWidth = 1.5;
+    roundRect(ctx, (W - tw) / 2, H * 0.42, tw, 44, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = `rgba(138,255,214,${alpha})`;
+    ctx.fillText(centerToastText, W / 2, H * 0.42 + 22);
+    ctx.restore();
+  }
 }
 
 // ========== 技能释放 ==========
@@ -1734,7 +1904,7 @@ function resetGame() {
   for (const slot of EQUIP_SLOTS) equipment[slot] = null;
   for (const k in upgradeLevels) delete upgradeLevels[k];
   combo.count = 0; combo.timer = 0; combo.best = 0; timeScale = 1; slowMoTimer = 0; flashScreen = 0;
-  goSubmitted = false; goRankEntry = null;
+  goRankEntry = null; goSubmitState = 'idle'; goSubmitInfo = null;
   applyEquipStats();
 }
 
@@ -2532,9 +2702,8 @@ function gainXp(v) {
 function gameOver() {
   state = STATE.OVER;
   Audio.bgmStop(); // 游戏结束停止BGM
-  // 自动提交上榜（取最高分）
-  goRankEntry = submitScore();
-  goSubmitted = true;
+  // 自动提交上榜到服务器（异步）
+  submitScore();
 }
 
 // ========== 世界渲染 ==========
@@ -3170,6 +3339,7 @@ function loop(ts) {
   if (!lastTime) lastTime = ts;
   let dt = (ts - lastTime) / 1000; lastTime = ts; if (dt > 0.05) dt = 0.05;
   if (state === STATE.PLAY) update(dt);
+  if (centerToastTimer > 0) centerToastTimer = Math.max(0, centerToastTimer - dt);
   if (state === STATE.PLAY || state === STATE.LEVELUP || state === STATE.OVER || state === STATE.PAUSE) {
     render(); drawUI();
   } else {
