@@ -25,6 +25,10 @@ const IS_LANDSCAPE = W >= H;
 // 底部 UI 预留（摇杆+技能按钮区域），横屏小屏减小
 const BOTTOM_RESERVE = Math.max(110, H * 0.26);
 
+// ========== 大地图（面积约为屏幕 9 倍）==========
+const MAP_W = W * 3;
+const MAP_H = H * 3;
+
 // 获取胶囊按钮位置，避免 UI 重叠
 let _menuBtn = { bottom: 48 };
 try { const r = wx.getMenuButtonBoundingClientRect(); if (r && r.bottom) _menuBtn = r; } catch (e) {}
@@ -185,7 +189,12 @@ function pickRarityBoss() { const r = Math.random() * 100; if (r < 30) return 'l
 
 const STATE = { START: 0, PLAY: 1, LEVELUP: 2, OVER: 3, PAUSE: 4 };
 let state = STATE.START;
-const cam = { x: 0, y: 0, shake: 0 };
+const cam = { x: 0, y: 0, shake: 0, followX: 0, followY: 0 };
+// 屏幕坐标 ↔ 世界坐标转换
+function worldToScreenX(wx) { return wx - cam.followX; }
+function worldToScreenY(wy) { return wy - cam.followY; }
+function screenToWorldX(sx) { return sx + cam.followX; }
+function screenToWorldY(sy) { return sy + cam.followY; }
 let flashScreen = 0;
 
 const player = {
@@ -339,6 +348,7 @@ function submitScore(id) {
 // ========== 游戏数据 ==========
 let enemies = [], bullets = [], particles = [], gems = [], pickups = [], floats = [];
 let chains = [], lasers = [], boomerangs = [], frosts = [];
+let traps = []; // 黑洞陷阱
 let boss = null;
 let time = 0, spawnTimer = 0, pickupTimer = 8, wave = 1, lastTime = 0;
 const upgradeLevels = {};
@@ -375,8 +385,8 @@ const skillBtns = {
 // 顶部按钮
 const TOP_R = 15;
 const topBtns = {
-  sound: { cx: W - TOP_R - 10, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
-  pause: { cx: W - TOP_R * 3 - 14, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
+  sound: { cx: W - TOP_R - 10 - SAFE_R, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
+  pause: { cx: W - TOP_R * 3 - 14 - SAFE_R, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
 };
 
 // 升级界面卡片
@@ -569,42 +579,75 @@ function drawOverlay(alpha) {
 }
 
 function drawHUD() {
-  const barW = W - 20, barX = 10;
-  // HP 条
-  const hpY = HUD_TOP;
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
-  roundRect(ctx, barX, hpY, barW, 12, 6); ctx.fill();
-  const hpGrad = ctx.createLinearGradient(barX, hpY, barX + barW, hpY);
-  hpGrad.addColorStop(0, '#ff4d6d'); hpGrad.addColorStop(1, '#ff8fa3');
-  ctx.fillStyle = hpGrad;
+  // ===== 王者荣耀风：左上角玩家信息卡片 =====
+  const avR = 18;                       // 头像半径
+  const cardX = 12 + SAFE_L;            // 卡片左起点（避开刘海）
+  const cardY = HUD_TOP + 4;            // 卡片顶部
+  const barW = Math.min(W * 0.32, 150); // 短血条宽度
+  const barH = 9;                       // 血条高度
+  const barX = cardX + avR * 2 + 10;    // 条起始 x（头像右侧）
+  const xpH = 5;                        // 经验条更细
+
+  // 头像背景圆
+  ctx.fillStyle = 'rgba(10,14,28,0.85)';
+  ctx.beginPath(); ctx.arc(cardX + avR, cardY + avR, avR + 2, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(138,255,214,0.6)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cardX + avR, cardY + avR, avR + 2, 0, TAU); ctx.stroke();
+  // 头像图标（玩家战机）
+  ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#8affd6'; ctx.shadowColor = 'rgba(138,255,214,0.6)'; ctx.shadowBlur = 6;
+  ctx.fillText('✦', cardX + avR, cardY + avR + 1); ctx.shadowBlur = 0;
+  // 等级徽章（头像右下角小圆）
+  const bx = cardX + avR * 2 - 2, by = cardY + avR * 2 - 2;
+  ctx.fillStyle = '#ffe27a';
+  ctx.beginPath(); ctx.arc(bx, by, 8, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#1a1408'; ctx.font = 'bold 10px sans-serif';
+  ctx.fillText(String(player.level), bx, by + 1);
+
+  // HP 条（短）
+  const hpY = cardY + 3;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  roundRect(ctx, barX - 1, hpY - 1, barW + 2, barH + 2, (barH + 2) / 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  roundRect(ctx, barX, hpY, barW, barH, barH / 2); ctx.fill();
   const hpW = barW * clamp(player.hp / player.maxHp, 0, 1);
-  if (hpW > 0) { roundRect(ctx, barX, hpY, hpW, 12, 6); ctx.fill(); }
-  // XP 条
-  const xpY = hpY + 16;
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
-  roundRect(ctx, barX, xpY, barW, 7, 4); ctx.fill();
-  const xpGrad = ctx.createLinearGradient(barX, xpY, barX + barW, xpY);
-  xpGrad.addColorStop(0, '#4dd0ff'); xpGrad.addColorStop(1, '#8affd6');
-  ctx.fillStyle = xpGrad;
+  if (hpW > 0) {
+    const hpGrad = ctx.createLinearGradient(barX, hpY, barX + barW, hpY);
+    hpGrad.addColorStop(0, '#ff4d6d'); hpGrad.addColorStop(1, '#ff8fa3');
+    ctx.fillStyle = hpGrad;
+    roundRect(ctx, barX, hpY, hpW, barH, barH / 2); ctx.fill();
+  }
+  // HP 数值
+  ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(Math.ceil(player.hp) + '/' + Math.round(player.maxHp), barX + 4, hpY + barH / 2 + 1);
+
+  // XP 条（更短更细，紧贴血条下方）
+  const xpY = hpY + barH + 3;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  roundRect(ctx, barX - 1, xpY - 1, barW + 2, xpH + 2, (xpH + 2) / 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  roundRect(ctx, barX, xpY, barW, xpH, xpH / 2); ctx.fill();
   const xpW = barW * clamp(player.xp / player.xpNext, 0, 1);
-  if (xpW > 0) { roundRect(ctx, barX, xpY, xpW, 7, 4); ctx.fill(); }
-  // 统计
-  const stY = xpY + 14;
+  if (xpW > 0) {
+    const xpGrad = ctx.createLinearGradient(barX, xpY, barX + barW, xpY);
+    xpGrad.addColorStop(0, '#4dd0ff'); xpGrad.addColorStop(1, '#8affd6');
+    ctx.fillStyle = xpGrad;
+    roundRect(ctx, barX, xpY, xpW, xpH, xpH / 2); ctx.fill();
+  }
+
+  // ===== 统计信息（左上角卡片下方，避开右上角按钮）=====
+  const stX = cardX + 2;
+  const stY = cardY + avR * 2 + 8;
   const m = Math.floor(time / 60), s = Math.floor(time % 60);
-  ctx.font = '13px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.fillStyle = '#ffe27a';
+  ctx.fillText(m + ':' + String(s).padStart(2, '0'), stX, stY);
+  ctx.font = '10px sans-serif';
   ctx.fillStyle = '#9aa6b8';
-  ctx.fillText('时间 ', barX, stY);
-  ctx.fillStyle = '#ffe27a'; ctx.fillText(m + ':' + String(s).padStart(2, '0'), barX + 26, stY);
-  ctx.fillStyle = '#9aa6b8'; ctx.fillText('击杀 ', barX + 90, stY);
-  ctx.fillStyle = '#ffe27a'; ctx.fillText(String(player.kills), barX + 116, stY);
-  ctx.fillStyle = '#9aa6b8'; ctx.fillText('波次 ', barX + 160, stY);
-  ctx.fillStyle = '#ffe27a'; ctx.fillText(String(wave), barX + 186, stY);
-  // 等级
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#8affd6'; ctx.font = 'bold 13px sans-serif';
-  ctx.fillText('Lv.' + player.level, W - 10, stY);
-  ctx.fillStyle = 'rgba(154,166,184,0.6)'; ctx.font = '11px sans-serif';
-  ctx.fillText(Math.floor(player.xp) + '/' + player.xpNext, W - 10, stY + 16);
+  ctx.fillText('击杀 ' + player.kills + ' · 波 ' + wave, stX, stY + 14);
 }
 
 function drawTopBtns() {
@@ -932,6 +975,7 @@ function drawUI() {
     return;
   }
   drawHUD();
+  drawBossBar();
   drawTopBtns();
   drawEquipBar();
   drawComboDisp();
@@ -977,7 +1021,8 @@ function castUlt() { const u = skills.ult; cam.shake = 16; Audio.ult();
 
 // ========== 游戏重置 ==========
 function resetGame() {
-  player.x = W / 2; player.y = H / 2 - 100;
+  // 玩家出生在地图中心
+  player.x = MAP_W / 2; player.y = MAP_H / 2;
   player.hp = 100; player.maxHp = 100; player.speed = 180;
   player.level = 1; player.xp = 0; player.xpNext = 5; player.kills = 0;
   player.invuln = 0; player.pickupRange = 90; player.regen = 0;
@@ -993,6 +1038,21 @@ function resetGame() {
   enemies = []; bullets = []; particles = []; gems = []; pickups = []; floats = [];
   chains = []; lasers = []; boomerangs = []; frosts = []; eqDrops = []; boss = null;
   time = 0; spawnTimer = 0; pickupTimer = 8; wave = 1; cam.shake = 0; nextBossStageIdx = 0;
+  // 相机初始对准玩家
+  cam.followX = clamp(player.x - W / 2, 0, MAP_W - W);
+  cam.followY = clamp(player.y - H / 2, 0, MAP_H - H);
+  // 初始化陷阱（黑洞）：在地图上随机分布，避开出生点
+  traps = [];
+  const trapCount = 5;
+  for (let i = 0; i < trapCount; i++) {
+    let tx, ty, tries = 0;
+    do {
+      tx = rand(MAP_W * 0.15, MAP_W * 0.85);
+      ty = rand(MAP_H * 0.15, MAP_H * 0.85);
+      tries++;
+    } while (dist2(tx, ty, player.x, player.y) < 400 * 400 && tries < 30);
+    traps.push({ x: tx, y: ty, killR: 28, pullR: 110, spin: rand(0, TAU) });
+  }
   for (let i = 0; i < 3; i++) spawnEnemy();
   for (const slot of EQUIP_SLOTS) equipment[slot] = null;
   for (const k in upgradeLevels) delete upgradeLevels[k];
@@ -1013,11 +1073,17 @@ const ENEMY_TYPES = {
   bomber: { r: 13, hp: 22, speed: 80, dmg: 18, xp: 2, color: '#ffcc33', glow: '#ffaa00', shape: 'cube', ai: 'bomb' },
 };
 function spawnEnemy(forceType) {
-  const margin = 40; const side = randi(0, 3); let x, y;
-  if (side === 0) { x = rand(-margin, W + margin); y = -margin; }
-  else if (side === 1) { x = W + margin; y = rand(-margin, H + margin); }
-  else if (side === 2) { x = rand(-margin, W + margin); y = H + margin; }
-  else { x = -margin; y = rand(-margin, H + margin); }
+  // 在玩家屏幕视野外生成（相机视野边缘 + 一定缓冲）
+  const margin = 60;
+  const vx0 = cam.followX - margin, vy0 = cam.followY - margin;
+  const vx1 = cam.followX + W + margin, vy1 = cam.followY + H + margin;
+  const side = randi(0, 3); let x, y;
+  if (side === 0) { x = rand(vx0, vx1); y = vy0; }
+  else if (side === 1) { x = vx1; y = rand(vy0, vy1); }
+  else if (side === 2) { x = rand(vx0, vx1); y = vy1; }
+  else { x = vx0; y = rand(vy0, vy1); }
+  // 限制在地图内
+  x = clamp(x, 20, MAP_W - 20); y = clamp(y, 20, MAP_H - 20);
   let type = forceType || 'grunt'; const r = Math.random();
   if (!forceType) {
     if (time > 10 && r < 0.30) type = 'runner';
@@ -1049,7 +1115,7 @@ let nextBossStageIdx = 0;
 function spawnBoss(stage) {
   const hpScale = 1 + time / 120;
   boss = {
-    x: W / 2, y: -80,
+    x: player.x, y: player.y - 260,
     hp: stage.hp * hpScale, maxHp: stage.hp * hpScale,
     r: stage.r, speed: stage.speed, dmg: stage.dmg, xp: stage.xp,
     color: stage.color, glow: stage.glow,
@@ -1120,14 +1186,14 @@ const PICKUP_TYPES = [
   { kind: 'chest', icon: '◆', color: '#ffe27a', name: '宝箱', desc: '获得大量经验' },
 ];
 function spawnPickup() { const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
-  pickups.push({ ...t, x: rand(60, W - 60), y: rand(100, H - BOTTOM_RESERVE - 40), r: 14, life: 18, pulse: 0 }); }
+  pickups.push({ ...t, x: rand(cam.followX + 60, cam.followX + W - 60), y: rand(cam.followY + 100, cam.followY + H - 60), r: 14, life: 18, pulse: 0 }); }
 function spawnPickupAt(x, y) {
   if (Math.random() < 0.18) {
     const slot = EQUIP_SLOTS[randi(0, 3)]; const rarity = pickRarity(); const eq = rollEquipment(slot, rarity);
-    eqDrops.push({ ...eq, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - BOTTOM_RESERVE - 40), r: 14, life: 40, pulse: 0 }); return;
+    eqDrops.push({ ...eq, x: clamp(x, 30, MAP_W - 30), y: clamp(y, 30, MAP_H - 30), r: 14, life: 40, pulse: 0 }); return;
   }
   const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
-  pickups.push({ ...t, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - BOTTOM_RESERVE - 40), r: 14, life: 15, pulse: 0 });
+  pickups.push({ ...t, x: clamp(x, 30, MAP_W - 30), y: clamp(y, 30, MAP_H - 30), r: 14, life: 15, pulse: 0 });
 }
 
 // ========== 升级池 ==========
@@ -1196,8 +1262,8 @@ function update(dt) {
     while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
     player.facing += d * Math.min(1, dt * 10);
   }
-  player.x = clamp(player.x, player.r, W - player.r);
-  player.y = clamp(player.y, player.r, H - player.r - BOTTOM_RESERVE);
+  player.x = clamp(player.x, player.r, MAP_W - player.r);
+  player.y = clamp(player.y, player.r, MAP_H - player.r);
   if (player.invuln > 0) player.invuln -= dt;
   if (player.regen > 0 && player.hp < player.maxHp) player.hp = Math.min(player.maxHp, player.hp + player.regen * dt);
 
@@ -1333,7 +1399,7 @@ function update(dt) {
   for (let i = bullets.length - 1; i >= 0; i--) { const bl = bullets[i];
     bl.x += bl.vx * dt; bl.y += bl.vy * dt; bl.life -= dt;
     if (Math.random() < 0.5) particles.push({ x: bl.x + rand(-2, 2), y: bl.y + rand(-2, 2), vx: rand(-15, 15), vy: rand(-15, 15), life: 0.2, max: 0.2, color: bl.color, r: rand(0.8, 1.5) });
-    if (bl.life <= 0 || bl.x < -20 || bl.x > W + 20 || bl.y < -20 || bl.y > H + 20) { bullets.splice(i, 1); continue; }
+    if (bl.life <= 0 || bl.x < cam.followX - 20 || bl.x > cam.followX + W + 20 || bl.y < cam.followY - 20 || bl.y > cam.followY + H + 20) { bullets.splice(i, 1); continue; }
     let consumed = false;
     for (let j = 0; j < enemies.length; j++) { const e = enemies[j]; if (bl.hit.has(e)) continue;
       if (dist2(bl.x, bl.y, e.x, e.y) < (bl.r + e.r) ** 2) { damageEnemy(e, bl.dmg, j); bl.hit.add(e);
@@ -1419,7 +1485,8 @@ function update(dt) {
     if (boss.hitFlash > 0) boss.hitFlash -= dt;
     if (boss.slow > 0) boss.slow -= dt;
     boss.angle += dt * 0.8;
-    const dest = boss.y < 150 ? { x: W / 2 + Math.sin(time * 0.5) * W * 0.25, y: 150 } : { x: W / 2 + Math.sin(time * 0.4) * W * 0.35, y: 140 + Math.cos(time * 0.3) * 40 };
+    // Boss 在玩家附近徘徊
+    const dest = { x: player.x + Math.sin(time * 0.5) * 180, y: player.y - 160 + Math.cos(time * 0.3) * 50 };
     const dx = dest.x - boss.x, dy = dest.y - boss.y; const d = Math.hypot(dx, dy) || 1;
     const sp = boss.speed * (boss.slow > 0 ? 0.6 : 1);
     boss.x += dx / d * Math.min(sp * dt, d); boss.y += dy / d * Math.min(sp * dt, d);
@@ -1478,7 +1545,7 @@ function update(dt) {
     if (p.kind === 'ring') { p.life -= dt; if (p.life <= 0) particles.splice(i, 1); }
     else if (p.kind === 'enemyShot') {
       p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
-      if (p.life <= 0 || p.x < -30 || p.x > W + 30 || p.y < -30 || p.y > H + 30) { particles.splice(i, 1); continue; }
+      if (p.life <= 0 || p.x < cam.followX - 30 || p.x > cam.followX + W + 30 || p.y < cam.followY - 30 || p.y > cam.followY + H + 30) { particles.splice(i, 1); continue; }
       if (player.invuln <= 0 && dist2(p.x, p.y, player.x, player.y) < (p.r + player.r) ** 2) {
         player.hp -= p.dmg; player.invuln = 0.5; cam.shake = 6;
         spawnParticles(player.x, player.y, '#ff4d6d', 6, 140); particles.splice(i, 1);
@@ -1489,6 +1556,36 @@ function update(dt) {
   // 浮字
   for (let i = floats.length - 1; i >= 0; i--) { const f = floats[i]; f.y -= 30 * dt; f.life -= dt; if (f.life <= 0) floats.splice(i, 1); }
   if (cam.shake > 0) cam.shake -= dt * 30;
+
+  // ===== 陷阱（黑洞）效果 =====
+  for (const tr of traps) {
+    const dx = tr.x - player.x, dy = tr.y - player.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // 引力区：缓慢吸引玩家
+    if (d < tr.pullR && d > tr.killR) {
+      const pull = (1 - d / tr.pullR) * 60;
+      player.x += dx / d * pull * dt; player.y += dy / d * pull * dt;
+    }
+    // 致命区：大掉血
+    if (d < tr.killR && player.invuln <= 0) {
+      player.hp -= 25; player.invuln = 0.6; cam.shake = 12; Audio.hurt();
+      spawnParticles(player.x, player.y, '#b066ff', 12, 200);
+      if (player.hp <= 0) { player.hp = 0; gameOver(); return; }
+    }
+    // 吸引并吞噬敌人
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      const ed = Math.hypot(tr.x - e.x, tr.y - e.y) || 1;
+      if (ed < tr.pullR) { e.x += (tr.x - e.x) / ed * 40 * dt; e.y += (tr.y - e.y) / ed * 40 * dt; }
+      if (ed < tr.killR) { spawnDeathBurst(e.x, e.y, e.color, e.r); enemies.splice(i, 1); }
+    }
+  }
+
+  // ===== 相机跟随玩家（屏幕中心）=====
+  const targetCX = clamp(player.x - W / 2, 0, MAP_W - W);
+  const targetCY = clamp(player.y - H / 2, 0, MAP_H - H);
+  cam.followX += (targetCX - cam.followX) * Math.min(1, dt * 8);
+  cam.followY += (targetCY - cam.followY) * Math.min(1, dt * 8);
 }
 function findClosestEnemy(x, y) {
   let best = boss, bd = boss ? dist2(boss.x, boss.y, x, y) : Infinity;
@@ -1547,44 +1644,96 @@ function gameOver() {
 
 // ========== 世界渲染 ==========
 function drawBackground() {
-  ctx.fillStyle = '#04050a'; ctx.fillRect(0, 0, W, H);
-  if (SPRITES.bg) {
-    const bg = SPRITES.bg;
-    const scale = Math.max(W / bg.width, H / bg.height) * 1.05;
-    const bw = bg.width * scale, bh = bg.height * scale;
-    const ox = (W - bw) / 2 + Math.sin(time * 0.04) * 8;
-    const oy = (H - bh) / 2 + Math.cos(time * 0.03) * 6;
-    ctx.globalAlpha = 0.85; ctx.drawImage(bg, ox, oy, bw, bh); ctx.globalAlpha = 1;
-  } else {
-    const g = ctx.createRadialGradient(player.x, player.y, 40, player.x, player.y, Math.max(W, H));
-    g.addColorStop(0, '#11162a'); g.addColorStop(0.5, '#0a0e1c'); g.addColorStop(1, '#04050a');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // 大地图底色（地图范围铺底）
+  ctx.fillStyle = '#04050a';
+  ctx.fillRect(0, 0, MAP_W, MAP_H);
+  // 地图边界发光（区分可活动区域）
+  ctx.strokeStyle = 'rgba(77,208,255,0.25)'; ctx.lineWidth = 4;
+  ctx.strokeRect(0, 0, MAP_W, MAP_H);
+  ctx.strokeStyle = 'rgba(138,255,214,0.12)'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([16, 12]);
+  ctx.strokeRect(8, 8, MAP_W - 16, MAP_H - 16);
+  ctx.setLineDash([]);
+  // 网格纹理（让移动有参照感）
+  ctx.strokeStyle = 'rgba(77,140,200,0.06)'; ctx.lineWidth = 1;
+  const grid = 120;
+  const vx0 = cam.followX, vy0 = cam.followY;
+  const gx0 = Math.floor(vx0 / grid) * grid, gy0 = Math.floor(vy0 / grid) * grid;
+  for (let x = gx0; x < vx0 + W + grid; x += grid) {
+    ctx.beginPath(); ctx.moveTo(x, Math.max(0, vy0 - grid)); ctx.lineTo(x, Math.min(MAP_H, vy0 + H + grid)); ctx.stroke();
   }
+  for (let y = gy0; y < vy0 + H + grid; y += grid) {
+    ctx.beginPath(); ctx.moveTo(Math.max(0, vx0 - grid), y); ctx.lineTo(Math.min(MAP_W, vx0 + W + grid), y); ctx.stroke();
+  }
+  // 玩家附近环境光
+  const g = ctx.createRadialGradient(player.x, player.y, 40, player.x, player.y, Math.max(W, H) * 0.7);
+  g.addColorStop(0, 'rgba(30,40,70,0.6)'); g.addColorStop(0.6, 'rgba(10,14,28,0.3)'); g.addColorStop(1, 'rgba(4,5,10,0)');
+  ctx.fillStyle = g; ctx.fillRect(vx0 - 50, vy0 - 50, W + 100, H + 100);
+  // 视差星层（屏幕坐标，但跟随相机）
   for (let i = 0; i < starLayers.length; i++) {
     const layer = starLayers[i];
     const parallax = (i + 1) * 0.04;
-    let ox = -player.x * parallax, oy = -player.y * parallax;
-    ox = ((ox % W) + W) % W - W; oy = ((oy % H) + H) % H - H;
-    ctx.globalAlpha = 0.7 - i * 0.15;
+    let ox = -cam.followX * parallax, oy = -cam.followY * parallax;
+    ox = ((ox % W) + W) % W - W + cam.followX; oy = ((oy % H) + H) % H - H + cam.followY;
+    ctx.globalAlpha = 0.5 - i * 0.1;
     ctx.drawImage(layer, ox, oy); ctx.drawImage(layer, ox + W, oy);
     ctx.drawImage(layer, ox, oy + H); ctx.drawImage(layer, ox + W, oy + H);
   }
   ctx.globalAlpha = 1;
+  // 飘动光晕（跟随相机视野）
   ctx.save(); ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < 3; i++) {
     const t = time * 0.06 + i * 2.1;
-    const fx = (W * 0.5 + Math.sin(t) * W * 0.35 + W) % W;
-    const fy = (H * 0.4 + Math.cos(t * 0.7) * H * 0.3 + H) % H;
+    const fx = cam.followX + W * 0.5 + Math.sin(t) * W * 0.35;
+    const fy = cam.followY + H * 0.4 + Math.cos(t * 0.7) * H * 0.3;
     const cols = ['rgba(77,140,255,0.05)', 'rgba(176,80,255,0.04)', 'rgba(255,140,80,0.04)'][i];
     const rad = Math.max(W, H) * 0.35;
     const fg = ctx.createRadialGradient(fx, fy, 0, fx, fy, rad);
     fg.addColorStop(0, cols); fg.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = fg; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = fg; ctx.fillRect(cam.followX - 50, cam.followY - 50, W + 100, H + 100);
   }
   ctx.restore();
-  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
-  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.65)');
-  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  // 视野暗角
+  const vg = ctx.createRadialGradient(cam.followX + W / 2, cam.followY + H / 2, Math.min(W, H) * 0.35, cam.followX + W / 2, cam.followY + H / 2, Math.max(W, H) * 0.75);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+  ctx.fillStyle = vg; ctx.fillRect(cam.followX - 50, cam.followY - 50, W + 100, H + 100);
+}
+
+// ========== 陷阱渲染（黑洞）==========
+function drawTrap(tr) {
+  tr.spin += 0.04;
+  // 引力场（外圈）
+  const pg = ctx.createRadialGradient(tr.x, tr.y, tr.killR * 0.5, tr.x, tr.y, tr.pullR);
+  pg.addColorStop(0, 'rgba(120,40,180,0.30)');
+  pg.addColorStop(0.6, 'rgba(80,20,140,0.12)');
+  pg.addColorStop(1, 'rgba(40,10,80,0)');
+  ctx.fillStyle = pg;
+  ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.pullR, 0, TAU); ctx.fill();
+  // 引力场虚线边界
+  ctx.strokeStyle = 'rgba(176,102,255,0.35)'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 8]);
+  ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.pullR, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  // 旋转吸积盘
+  ctx.save();
+  ctx.translate(tr.x, tr.y); ctx.rotate(tr.spin);
+  for (let i = 0; i < 4; i++) {
+    ctx.rotate(TAU / 4);
+    ctx.strokeStyle = `rgba(200,140,255,${0.5 - i * 0.08})`; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, tr.killR + 6 + i * 5, 0, Math.PI * 1.3); ctx.stroke();
+  }
+  ctx.restore();
+  // 黑洞核心
+  const cg = ctx.createRadialGradient(tr.x, tr.y, 0, tr.x, tr.y, tr.killR);
+  cg.addColorStop(0, 'rgba(0,0,0,1)');
+  cg.addColorStop(0.7, 'rgba(20,5,40,1)');
+  cg.addColorStop(1, 'rgba(120,40,200,0.7)');
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.killR, 0, TAU); ctx.fill();
+  // 核心边缘高光
+  ctx.strokeStyle = 'rgba(200,140,255,0.8)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.killR, 0, TAU); ctx.stroke();
 }
 
 function drawPlayer() {
@@ -1627,6 +1776,15 @@ function drawPlayer() {
     ctx.shadowBlur = 0;
   }
   ctx.restore();
+  // ===== 玩家头顶小血条（王者荣耀英雄头顶式）=====
+  const hbW = 44, hbH = 4, hbX = player.x - hbW / 2, hbY = player.y - player.r - 14;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, hbX - 1, hbY - 1, hbW + 2, hbH + 2, 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  roundRect(ctx, hbX, hbY, hbW, hbH, 2); ctx.fill();
+  const hpRatio = clamp(player.hp / player.maxHp, 0, 1);
+  ctx.fillStyle = hpRatio > 0.5 ? '#4dff88' : hpRatio > 0.25 ? '#ffd86b' : '#ff4d6d';
+  roundRect(ctx, hbX, hbY, hbW * hpRatio, hbH, 2); ctx.fill();
 }
 function drawOrbit() {
   const o = skills.orbit; if (o.count === 0) return;
@@ -1721,16 +1879,27 @@ function drawBoss() {
   if (boss.slow > 0) { ctx.strokeStyle = 'rgba(159,214,255,0.8)'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(0, 0, R * 1.4, 0, TAU); ctx.stroke(); }
   ctx.restore();
-  // Boss 顶部血条
-  const barW = Math.min(W * 0.7, 520), barH = 14;
-  const bx = (W - barW) / 2, by = HUD_TOP + 8;
-  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 4);
+}
+// Boss 顶部血条（屏幕坐标，在 drawUI 中调用）
+function drawBossBar() {
+  if (!boss) return;
+  const barW = Math.min(W * 0.45, 320), barH = 10;
+  const bx = (W - barW) / 2, by = HUD_TOP + 30;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  roundRect(ctx, bx - 3, by - 3, barW + 6, barH + 6, 3); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  roundRect(ctx, bx, by, barW, barH, barH / 2); ctx.fill();
   const bg = ctx.createLinearGradient(bx, by, bx + barW, by);
   bg.addColorStop(0, '#ff2d55'); bg.addColorStop(1, '#ff8a4d');
-  ctx.fillStyle = bg; ctx.fillRect(bx, by, barW * clamp(boss.hp / boss.maxHp, 0, 1), barH);
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1; ctx.strokeRect(bx, by, barW, barH);
-  ctx.textAlign = 'center'; ctx.font = 'bold 12px sans-serif'; ctx.fillStyle = '#ffd6de';
-  ctx.fillText((boss.title || '夜魇巨像') + ' · WORLD BOSS', W / 2, by - 6);
+  ctx.fillStyle = bg;
+  const bw = barW * clamp(boss.hp / boss.maxHp, 0, 1);
+  if (bw > 0) { roundRect(ctx, bx, by, bw, barH, barH / 2); ctx.fill(); }
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1;
+  roundRect(ctx, bx, by, barW, barH, barH / 2); ctx.stroke();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.font = 'bold 11px sans-serif';
+  ctx.fillStyle = '#ffd6de'; ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 3;
+  ctx.fillText((boss.title || '夜魇巨像') + ' · BOSS', W / 2, by - 5);
+  ctx.shadowBlur = 0;
 }
 function drawBullet(b) {
   ctx.save();
@@ -1962,9 +2131,13 @@ function drawFloats() {
 
 // ========== 主渲染 ==========
 function render() {
+  // ===== 世界渲染（应用相机偏移）=====
   ctx.save();
-  if (cam.shake > 0) ctx.translate(rand(-cam.shake, cam.shake), rand(-cam.shake, cam.shake));
+  let camX = cam.followX, camY = cam.followY;
+  if (cam.shake > 0) { camX -= rand(-cam.shake, cam.shake); camY -= rand(-cam.shake, cam.shake); }
+  ctx.translate(-camX, -camY);
   drawBackground();
+  for (const tr of traps) drawTrap(tr);
   for (const g of gems) drawGem(g);
   for (const p of pickups) drawPickup(p);
   for (const eq of eqDrops) drawEqDrop(eq);
@@ -1980,6 +2153,7 @@ function render() {
   drawParticles();
   drawFloats();
   ctx.restore();
+  // ===== UI 渲染（屏幕坐标，不受相机影响）=====
   if (flashScreen > 0) {
     ctx.fillStyle = `rgba(255,255,255,${flashScreen})`;
     ctx.fillRect(0, 0, W, H);
@@ -1994,7 +2168,9 @@ function loop(ts) {
   if (state === STATE.PLAY || state === STATE.LEVELUP || state === STATE.OVER || state === STATE.PAUSE) {
     render(); drawUI();
   } else {
-    drawBackground(); drawUI();
+    // START 状态：纯背景 + UI（不进入世界渲染，避免依赖未初始化的 cam/player）
+    ctx.fillStyle = '#04050a'; ctx.fillRect(0, 0, W, H);
+    drawUI();
   }
   requestAnimationFrame(loop);
 }
