@@ -737,6 +737,8 @@ function resetGame(){
   enemies=[]; bullets=[]; particles=[]; gems=[]; pickups=[]; floats=[];
   chains=[]; lasers=[]; boomerangs=[]; frosts=[]; eqDrops=[]; boss=null;
   time=0; spawnTimer=0; pickupTimer=8; wave=1; cam.shake=0;
+  // 预生成3个敌人，避免开局空场
+  for(let i=0;i<3;i++) spawnEnemy();
   for(const slot of EQUIP_SLOTS) equipment[slot]=null;
   for(const k in upgradeLevels) delete upgradeLevels[k];
   loadTalent(); applyTalentBonus();
@@ -918,9 +920,9 @@ function update(dt){
 
   spawnTimer -= dt;
   const targetCount = Math.min(8+Math.floor(time/4)*2, 90);
-  const spawnInterval = Math.max(0.25, 1.1-time/80);
+  const spawnInterval = Math.max(0.25, 0.6-time/100);
   if(spawnTimer<=0 && enemies.length < targetCount){
-    const batch = 1+Math.floor(time/30);
+    const batch = 1+Math.floor(time/15);
     for(let i=0;i<batch && enemies.length<targetCount;i++) spawnEnemy();
     spawnTimer = spawnInterval;
   }
