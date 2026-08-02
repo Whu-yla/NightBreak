@@ -140,10 +140,36 @@ const SPRITE_LIST = [
 ];
 let spritesReady = 0;
 const spritesTotal = SPRITE_LIST.length;
+// 把 JPG 白底抠除为透明，存到离屏 canvas（bg 背景图不抠）
+function processSprite(key, img) {
+  // 背景图保留原样（满屏铺底，不需要透明）
+  if (key === 'bg') { SPRITES[key] = img; return; }
+  const w = img.width, h = img.height;
+  const c = wx.createCanvas(); c.width = w; c.height = h;
+  const cx = c.getContext('2d');
+  cx.drawImage(img, 0, 0);
+  let data;
+  try { data = cx.getImageData(0, 0, w, h); } catch (e) { SPRITES[key] = img; return; }
+  const d = data.data;
+  // 抠白：亮度高且饱和度低（接近白/浅灰）的像素变透明，用羽化避免锯齿
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const sat = mx - mn;            // 饱和度
+    const light = (mx + mn) / 2;    // 亮度
+    if (light > 215 && sat < 28) {
+      // 越白越透明，做羽化
+      const t = (light - 215) / 40;
+      d[i + 3] = Math.max(0, Math.round(d[i + 3] * (1 - Math.min(1, t))));
+    }
+  }
+  cx.putImageData(data, 0, 0);
+  SPRITES[key] = c;
+}
 function loadSprites(cb) {
   SPRITE_LIST.forEach(([key, src]) => {
     const img = wx.createImage();
-    img.onload = () => { SPRITES[key] = img; spritesReady++; if (spritesReady === spritesTotal && cb) cb(); };
+    img.onload = () => { processSprite(key, img); spritesReady++; if (spritesReady === spritesTotal && cb) cb(); };
     img.onerror = () => { spritesReady++; if (spritesReady === spritesTotal && cb) cb(); };
     img.src = src;
   });
@@ -340,14 +366,34 @@ function shareScore() {
 
 // ========== 排行榜 ==========
 const RANK_KEY = 'nightbreak_rank_v1';
-const ID_KEY = 'nightbreak_last_id';
+const NAME_KEY = 'nightbreak_player_name';
+// 启动时静默登录，生成默认昵称（微信小游戏无后端，无法换 openid，用本地昵称）
+let playerName = '';
+function ensureLogin() {
+  try { wx.login({ success: () => {} }); } catch (e) {}
+  playerName = wx.getStorageSync(NAME_KEY) || '';
+  if (!playerName) {
+    // 生成"指挥官+4位"默认昵称
+    const suffix = String(Math.floor(1000 + Math.random() * 9000));
+    playerName = '指挥官' + suffix;
+    wx.setStorageSync(NAME_KEY, playerName);
+  }
+}
 function loadRank() { try { return JSON.parse(wx.getStorageSync(RANK_KEY) || '[]'); } catch (e) { return []; } }
 function saveRank(list) { try { wx.setStorageSync(RANK_KEY, JSON.stringify(list.slice(0, 20))); } catch (e) {} }
 function calcScore() { return player.level * 1000 + player.kills * 50 + Math.floor(time); }
-function submitScore(id) {
+// 自动提交：每个昵称只保留最高分
+function submitScore() {
   const list = loadRank();
-  const entry = { id, score: calcScore(), level: player.level, kills: player.kills, time: Math.floor(time), wave, date: Date.now() };
-  list.push(entry); list.sort((a, b) => b.score - a.score); saveRank(list);
+  const score = calcScore();
+  const entry = { id: playerName, score, level: player.level, kills: player.kills, time: Math.floor(time), wave, date: Date.now() };
+  const existIdx = list.findIndex(e => e.id === playerName);
+  if (existIdx >= 0) {
+    if (score > list[existIdx].score) list[existIdx] = entry; // 刷新最高分
+  } else {
+    list.push(entry);
+  }
+  list.sort((a, b) => b.score - a.score); saveRank(list);
   return entry;
 }
 
@@ -401,21 +447,10 @@ let levelUpCardRects = [];
 
 // 结算界面状态
 let goSubmitted = false;
-let goPlayerId = '';
 let goRankEntry = null;
-let keyboardActive = false;
 
 // 排行榜界面
 let showRankFromStart = false;
-
-// 键盘监听（全局注册一次）
-wx.onKeyboardInput((res) => { if (keyboardActive) goPlayerId = res.value || ''; });
-wx.onKeyboardConfirm((res) => {
-  if (keyboardActive) {
-    goPlayerId = (res.value || '').slice(0, 12);
-    wx.hideKeyboard(); keyboardActive = false;
-  }
-});
 
 // 触控处理
 function onTouchStart(e) {
@@ -501,14 +536,18 @@ wx.onTouchEnd(onTouchEnd);
 wx.onTouchCancel(onTouchEnd);
 
 function handleStartTouch(x, y) {
-  const btnW = W * 0.5, btnH = 46;
-  const btnY = H * 0.62;
+  const btnW = IS_LANDSCAPE ? W * 0.32 : W * 0.7;
+  const btnH = 58;
+  const btnGap = 18;
+  const totalBtnH = btnH * 2 + btnGap;
+  const btnRightX = IS_LANDSCAPE ? W * 0.62 : (W - btnW) / 2;
+  const btnStartY = H / 2 - totalBtnH / 2;
   // 开始按钮
-  if (ptInRect(x, y, (W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH)) {
+  if (ptInRect(x, y, btnRightX, btnStartY, btnW, btnH)) {
     resetGame(); state = STATE.PLAY; return;
   }
   // 排行榜按钮
-  if (ptInRect(x, y, (W - btnW) / 2 + btnW / 2 + 6, btnY, W * 0.36, btnH)) {
+  if (ptInRect(x, y, btnRightX, btnStartY + btnH + btnGap, btnW, btnH)) {
     showRankFromStart = true; return;
   }
 }
@@ -517,31 +556,8 @@ function handleRankClose(x, y) {
   if (ptInRect(x, y, (W - btnW) / 2, H * 0.85, btnW, btnH)) showRankFromStart = false;
 }
 function handleOverTouch(x, y) {
-  const btnW = W * 0.4, btnH = 42;
-  const btnY = H * 0.75;
-  // 提交上榜
-  if (!goSubmitted) {
-    const submitW = W * 0.6, submitH = 42;
-    if (ptInRect(x, y, (W - submitW) / 2, H * 0.52, submitW, submitH)) {
-      if (!goPlayerId) {
-        keyboardActive = true;
-        wx.showKeyboard({ defaultValue: '', maxLength: 12, multiple: false, confirmHold: false, confirmType: 'done' });
-      } else {
-        wx.setStorageSync(ID_KEY, goPlayerId);
-        goRankEntry = submitScore(goPlayerId); goSubmitted = true;
-      }
-      return;
-    }
-  }
-  // 修改ID
-  if (goSubmitted) {
-    const idW = W * 0.6, idH = 36;
-    if (ptInRect(x, y, (W - idW) / 2, H * 0.52, idW, idH)) {
-      keyboardActive = true;
-      wx.showKeyboard({ defaultValue: goPlayerId, maxLength: 12, multiple: false, confirmHold: false, confirmType: 'done' });
-      return;
-    }
-  }
+  const btnW = W * 0.4, btnH = 46;
+  const btnY = H * 0.82;
   // 再次突围
   if (ptInRect(x, y, (W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH)) {
     resetGame(); state = STATE.PLAY; return;
@@ -797,38 +813,45 @@ function drawHint() {
 }
 
 function drawStartScreen() {
-  drawOverlay(0.85);
+  drawOverlay(0.88);
+  // 左侧：标题 + 简介（横屏左半区）
+  const leftW = IS_LANDSCAPE ? W * 0.55 : W * 0.92;
+  const dx = IS_LANDSCAPE ? W * 0.06 : W * 0.04;
   // 标题
-  const tg = ctx.createLinearGradient(0, H * 0.18, W, H * 0.18);
+  const tg = ctx.createLinearGradient(dx, H * 0.18, dx + leftW, H * 0.18);
   tg.addColorStop(0, '#4dd0ff'); tg.addColorStop(0.5, '#8affd6'); tg.addColorStop(1, '#ffe27a');
-  ctx.fillStyle = tg;
-  ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('暗夜突围', W / 2, H * 0.18);
-  ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a6';
-  ctx.fillText('N I G H T B R E A K', W / 2, H * 0.18 + 26);
-  // 描述
+  ctx.fillStyle = tg; ctx.shadowColor = 'rgba(77,208,255,0.4)'; ctx.shadowBlur = 22;
+  ctx.font = 'bold 36px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('暗 夜 突 围', dx, H * 0.22);
+  ctx.shadowBlur = 0;
+  ctx.font = '13px sans-serif'; ctx.fillStyle = '#8a93a6';
+  ctx.fillText('N  I  G  H  T  B  R  E  A  K', dx, H * 0.22 + 30);
+  // 简介
   ctx.font = '13px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillStyle = '#aab4c6'; const dx = W * 0.08;
+  ctx.fillStyle = '#aab4c6';
   const lines = [
-    '暗夜之中敌潮汹涌而来，驾驶战机自动释放弹幕清场。',
-    '击杀敌人获取经验升级，学习闪电链、激光束、回旋镖等强力技能；',
-    '警惕冲锋、分裂、远程、自爆四类特殊敌人；',
-    '2分钟击败精英Boss，5分钟挑战终极Boss，掉落传说装备！',
-    '活得越久，敌潮越强。',
+    '· 暗夜之中敌潮汹涌，驾驶战机自动释放弹幕清场',
+    '· 击杀获取经验升级，学习闪电链/激光束/回旋镖',
+    '· 警惕冲锋、分裂、远程、自爆四类特殊敌人',
+    '· 2分钟精英Boss，5分钟终极Boss，掉落传说装备',
+    '· 大地图自由走位，小心黑洞陷阱！',
   ];
-  let ly = H * 0.26;
-  for (const ln of lines) { ctx.fillText(ln, dx, ly); ly += 22; }
+  let ly = H * 0.36;
+  for (const ln of lines) { ctx.fillText(ln, dx, ly); ly += 24; }
   // 操作说明
   ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a6';
-  ly += 6;
-  ctx.fillText('左下方摇杆控制移动 · 右下方技能按钮点击释放', dx, ly); ly += 20;
-  ctx.fillText('（CD自动倒计时，摇杆固定位置）', dx, ly);
-  // 按钮
-  const btnY = H * 0.62, btnH = 46;
-  const btnW1 = W * 0.5;
-  drawGradientBtn((W - btnW1) / 2 - btnW1 / 2 - 6, btnY, btnW1, btnH, '开始突围', '#4dd0ff', '#8affd6');
-  const btnW2 = W * 0.36;
-  drawGradientBtn((W - btnW1) / 2 + btnW1 / 2 + 6, btnY, btnW2, btnH, '排行榜', '#b066ff', '#4dd0ff');
+  ly += 8;
+  ctx.fillText('左下摇杆移动 · 右下技能按钮释放', dx, ly);
+
+  // 右侧：两个大按钮（竖排，横屏右半区居中）
+  const btnW = IS_LANDSCAPE ? W * 0.32 : W * 0.7;
+  const btnH = 58;
+  const btnGap = 18;
+  const totalBtnH = btnH * 2 + btnGap;
+  const btnRightX = IS_LANDSCAPE ? W * 0.62 : (W - btnW) / 2;
+  const btnStartY = H / 2 - totalBtnH / 2;
+  drawGradientBtn(btnRightX, btnStartY, btnW, btnH, '开 始 突 围', '#4dd0ff', '#8affd6', 20);
+  drawGradientBtn(btnRightX, btnStartY + btnH + btnGap, btnW, btnH, '排  行  榜', '#b066ff', '#4dd0ff', 18);
 }
 
 function drawLevelUpScreen() {
@@ -920,11 +943,18 @@ function drawOverScreen() {
   drawOverlay(0.85);
   ctx.font = 'bold 26px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ff6b8a'; ctx.shadowColor = 'rgba(255,77,109,0.5)'; ctx.shadowBlur = 22;
-  ctx.fillText('突 围 失 败', W / 2, H * 0.14);
+  ctx.fillText('突 围 失 败', W / 2, H * 0.10);
   ctx.shadowBlur = 0;
   ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a6';
-  ctx.fillText('你的战机坠毁在暗夜中', W / 2, H * 0.14 + 24);
-  // 统计
+  ctx.fillText('你的战机坠毁在暗夜中', W / 2, H * 0.10 + 24);
+  // 本局统计（左列）+ 排行榜（右列），横屏并排
+  const colW = IS_LANDSCAPE ? W * 0.4 : W * 0.9;
+  const colGap = IS_LANDSCAPE ? W * 0.04 : 0;
+  const leftX = IS_LANDSCAPE ? W * 0.04 : W * 0.05;
+  const rightX = IS_LANDSCAPE ? W * 0.5 : W * 0.05;
+  // 左：本局战绩
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#8affd6';
+  ctx.fillText('本 局 战 绩', leftX, H * 0.20);
   const m = Math.floor(time / 60), s = Math.floor(time % 60);
   const stats = [
     ['存活时间', m + ':' + String(s).padStart(2, '0')],
@@ -933,39 +963,44 @@ function drawOverScreen() {
     ['波次', String(wave)],
     ['总得分', String(calcScore())],
   ];
-  let sy = H * 0.22;
+  let sy = H * 0.24;
   for (const [k, v] of stats) {
-    ctx.font = '14px sans-serif'; ctx.textAlign = 'right'; ctx.fillStyle = '#8a93a6';
-    ctx.fillText(k, W / 2 - 10, sy);
+    ctx.font = '13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#8a93a6';
+    ctx.fillText(k, leftX, sy);
     ctx.textAlign = 'left'; ctx.fillStyle = v === String(calcScore()) ? '#8affd6' : '#ffe27a';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillText(v, W / 2 + 10, sy);
-    sy += 24;
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText(v, leftX + 90, sy);
+    sy += 22;
   }
-  // 提交/排行榜
-  if (!goSubmitted) {
-    drawGradientBtn((W - W * 0.6) / 2, H * 0.52, W * 0.6, 42,
-      goPlayerId ? '提交上榜 (' + goPlayerId + ')' : '点击输入ID并上榜', '#4dd0ff', '#8affd6', 14);
-  } else {
-    ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#8affd6';
-    ctx.fillText('暗 夜 英 雄 榜', W / 2, H * 0.50);
-    const list = loadRank().slice(0, 5);
-    let ry = H * 0.53;
-    for (let i = 0; i < list.length; i++) {
-      const r = list[i];
-      const isMe = goRankEntry && r.id === goRankEntry.id && r.score === goRankEntry.score && r.date === goRankEntry.date;
-      ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillStyle = isMe ? '#4dd0ff' : (i < 3 ? '#ffe27a' : '#9aa6b8');
-      ctx.fillText((i + 1) + '. ' + r.id, W * 0.2, ry);
-      ctx.textAlign = 'right';
-      ctx.fillText(String(r.score) + ' (Lv.' + r.level + ')', W * 0.8, ry);
-      ry += 18;
-    }
+  // 右：英雄榜（自动已提交）
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#8affd6';
+  ctx.fillText('暗 夜 英 雄 榜', rightX, H * 0.20);
+  const list = loadRank();
+  const myRankIdx = goRankEntry ? list.findIndex(e => e.id === goRankEntry.id && e.score === goRankEntry.score && e.date === goRankEntry.date) : -1;
+  let ry = H * 0.24;
+  const showCount = Math.min(6, list.length);
+  for (let i = 0; i < showCount; i++) {
+    const r = list[i];
+    const isMe = i === myRankIdx;
+    ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillStyle = isMe ? '#4dd0ff' : (i === 0 ? '#ffe27a' : i < 3 ? '#cd9b4a' : '#9aa6b8');
+    ctx.fillText((i + 1) + '. ' + r.id, rightX, ry);
+    ctx.textAlign = 'right';
+    ctx.fillText(String(r.score) + ' (Lv.' + r.level + ')', rightX + colW, ry);
+    ry += 18;
+  }
+  // 若自己不在前6，单独显示自己的名次
+  if (myRankIdx >= 6) {
+    ry += 6;
+    ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#4dd0ff';
+    ctx.fillText((myRankIdx + 1) + '. ' + goRankEntry.id + ' (你)', rightX, ry);
+    ctx.textAlign = 'right';
+    ctx.fillText(String(goRankEntry.score) + ' (Lv.' + goRankEntry.level + ')', rightX + colW, ry);
   }
   // 按钮
-  const btnY = H * 0.75, btnW = W * 0.4, btnH = 42;
-  drawGradientBtn((W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH, '再次突围', '#4dd0ff', '#8affd6');
-  drawGradientBtn((W - btnW) / 2 + btnW / 2 + 6, btnY, btnW, btnH, '分享战绩', '#b066ff', '#4dd0ff');
+  const btnY = H * 0.82, btnW = W * 0.4, btnH = 46;
+  drawGradientBtn((W - btnW) / 2 - btnW / 2 - 6, btnY, btnW, btnH, '再次突围', '#4dd0ff', '#8affd6', 16);
+  drawGradientBtn((W - btnW) / 2 + btnW / 2 + 6, btnY, btnW, btnH, '分享战绩', '#b066ff', '#4dd0ff', 16);
 }
 
 function drawPauseScreen() {
@@ -1096,13 +1131,13 @@ function resetGame() {
       ty = rand(MAP_H * 0.15, MAP_H * 0.85);
       tries++;
     } while (dist2(tx, ty, player.x, player.y) < 400 * 400 && tries < 30);
-    traps.push({ x: tx, y: ty, killR: 28, pullR: 110, spin: rand(0, TAU) });
+    traps.push({ x: tx, y: ty, killR: 34, pullR: 135, spin: rand(0, TAU) });
   }
   for (let i = 0; i < 3; i++) spawnEnemy();
   for (const slot of EQUIP_SLOTS) equipment[slot] = null;
   for (const k in upgradeLevels) delete upgradeLevels[k];
   combo.count = 0; combo.timer = 0; combo.best = 0; timeScale = 1; slowMoTimer = 0; flashScreen = 0;
-  goSubmitted = false; goPlayerId = wx.getStorageSync(ID_KEY) || ''; goRankEntry = null;
+  goSubmitted = false; goRankEntry = null;
   applyEquipStats();
 }
 
@@ -1682,9 +1717,9 @@ function gainXp(v) {
 }
 function gameOver() {
   state = STATE.OVER;
-  goSubmitted = false;
-  goPlayerId = wx.getStorageSync(ID_KEY) || '';
-  goRankEntry = null;
+  // 自动提交上榜（取最高分）
+  goRankEntry = submitScore();
+  goSubmitted = true;
 }
 
 // ========== 世界渲染 ==========
@@ -1744,41 +1779,73 @@ function drawBackground() {
   ctx.fillStyle = vg; ctx.fillRect(cam.followX - 50, cam.followY - 50, W + 100, H + 100);
 }
 
-// ========== 陷阱渲染（黑洞）==========
+// ========== 陷阱渲染（黑洞）—— 高对比危险标识 ==========
 function drawTrap(tr) {
   tr.spin += 0.04;
-  // 引力场（外圈）
-  const pg = ctx.createRadialGradient(tr.x, tr.y, tr.killR * 0.5, tr.x, tr.y, tr.pullR);
-  pg.addColorStop(0, 'rgba(120,40,180,0.30)');
-  pg.addColorStop(0.6, 'rgba(80,20,140,0.12)');
-  pg.addColorStop(1, 'rgba(40,10,80,0)');
+  // 玩家是否在引力区内：在区内则警告更急促（脉动加快）
+  const pd = Math.hypot(tr.x - player.x, tr.y - player.y);
+  const inDanger = pd < tr.pullR;
+  const pulse = 0.5 + 0.5 * Math.sin(time * (inDanger ? 12 : 6));
+  // 1) 危险区域填充：暗红渐变（红色=危险直觉，替代原紫色）
+  const pg = ctx.createRadialGradient(tr.x, tr.y, tr.killR * 0.6, tr.x, tr.y, tr.pullR);
+  pg.addColorStop(0, `rgba(255,60,90,${0.22 + pulse * 0.10})`);
+  pg.addColorStop(0.55, 'rgba(180,30,70,0.10)');
+  pg.addColorStop(1, 'rgba(80,10,30,0)');
   ctx.fillStyle = pg;
   ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.pullR, 0, TAU); ctx.fill();
-  // 引力场虚线边界
-  ctx.strokeStyle = 'rgba(176,102,255,0.35)'; ctx.lineWidth = 1.5;
-  ctx.setLineDash([6, 8]);
+  // 2) 外圈脉动警告环（明亮红色，最关键的易读性元素）
+  ctx.save();
+  ctx.lineWidth = 2.5 + pulse * 1.5;
+  ctx.strokeStyle = `rgba(255,80,110,${0.55 + pulse * 0.40})`;
+  ctx.shadowColor = '#ff5078'; ctx.shadowBlur = 12 + pulse * 10;
   ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.pullR, 0, TAU); ctx.stroke();
-  ctx.setLineDash([]);
-  // 旋转吸积盘
+  ctx.restore();
+  // 3) 危险条纹（黄黑斜纹围绕外环，工业警告标识）
+  ctx.save();
+  ctx.translate(tr.x, tr.y); ctx.rotate(tr.spin * 0.5);
+  const stripeN = 16;
+  for (let i = 0; i < stripeN; i++) {
+    const a0 = (i / stripeN) * TAU, a1 = a0 + TAU / stripeN * 0.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, tr.pullR - 4, a0, a1);
+    ctx.arc(0, 0, tr.pullR - 11, a1, a0, true);
+    ctx.closePath();
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(255,200,60,0.55)' : 'rgba(40,20,10,0.5)';
+    ctx.fill();
+  }
+  ctx.restore();
+  // 4) 旋转吸积盘（红紫色调，强化"吞噬"感）
   ctx.save();
   ctx.translate(tr.x, tr.y); ctx.rotate(tr.spin);
   for (let i = 0; i < 4; i++) {
     ctx.rotate(TAU / 4);
-    ctx.strokeStyle = `rgba(200,140,255,${0.5 - i * 0.08})`; ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgba(255,120,160,${0.55 - i * 0.10})`; ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(0, 0, tr.killR + 6 + i * 5, 0, Math.PI * 1.3); ctx.stroke();
+    ctx.arc(0, 0, tr.killR + 7 + i * 5, 0, Math.PI * 1.3); ctx.stroke();
   }
   ctx.restore();
-  // 黑洞核心
+  // 5) 黑洞核心（纯黑 + 红色致命边缘高光）
   const cg = ctx.createRadialGradient(tr.x, tr.y, 0, tr.x, tr.y, tr.killR);
   cg.addColorStop(0, 'rgba(0,0,0,1)');
-  cg.addColorStop(0.7, 'rgba(20,5,40,1)');
-  cg.addColorStop(1, 'rgba(120,40,200,0.7)');
+  cg.addColorStop(0.65, 'rgba(15,3,30,1)');
+  cg.addColorStop(1, 'rgba(120,20,50,0.85)');
   ctx.fillStyle = cg;
   ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.killR, 0, TAU); ctx.fill();
-  // 核心边缘高光
-  ctx.strokeStyle = 'rgba(200,140,255,0.8)'; ctx.lineWidth = 2;
+  // 核心边缘：脉动红光（致命区清晰可辨）
+  ctx.save();
+  ctx.lineWidth = 2.5 + pulse * 1.5;
+  ctx.strokeStyle = `rgba(255,90,120,${0.8 + pulse * 0.2})`;
+  ctx.shadowColor = '#ff5078'; ctx.shadowBlur = 14 + pulse * 8;
   ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.killR, 0, TAU); ctx.stroke();
+  ctx.restore();
+  // 6) 顶部危险标识（⚠ 脉动），远距离也能识别
+  ctx.save();
+  ctx.font = `bold ${18 + pulse * 4}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = `rgba(255,210,80,${0.85 + pulse * 0.15})`;
+  ctx.shadowColor = '#ff8a00'; ctx.shadowBlur = 10 + pulse * 6;
+  ctx.fillText('⚠', tr.x, tr.y - tr.pullR - 14 - pulse * 3);
+  ctx.restore();
 }
 
 function drawPlayer() {
@@ -2249,6 +2316,7 @@ function loop(ts) {
 
 // ========== 启动 ==========
 buildStarLayers();
+ensureLogin(); // 静默微信登录 + 生成/读取本地昵称，供结算自动上榜
 loadSprites(() => { /* 精灵图加载完成后会自动用于绘制 */ });
 
 // 切前台时恢复音频上下文（微信限制）
