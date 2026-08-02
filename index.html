@@ -1416,11 +1416,13 @@ function drawEnemy(e){
   }
 }
 function lighten(hex,amt){const h=hex.replace('#','');const r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16);
-  return '#'+[r,g,b].map(v=>Math.min(255,Math.round(v+(255-v)*amt)).toString(16).padStart(2,'0')).join('');}
+  if(isNaN(r)||isNaN(g)||isNaN(b)) return hex;
+  return '#'+[r,g,b].map(v=>Math.min(255,Math.max(0,Math.round(v+(255-v)*amt))).toString(16).padStart(2,'0')).join('');}
 function blendColor(a,b,t){const p=h=>{const s=h.replace('#','');return[parseInt(s.substr(0,2),16),parseInt(s.substr(2,2),16),parseInt(s.substr(4,2),16)];};
   const [ar,ag,ab]=p(a),[br,bg,bb]=p(b);
+  if(isNaN(ar)||isNaN(ag)||isNaN(ab)||isNaN(br)||isNaN(bg)||isNaN(bb)) return a;
   const r=Math.round(ar+(br-ar)*t),g=Math.round(ag+(bg-ag)*t),bl=Math.round(ab+(bb-ab)*t);
-  return '#'+[r,g,bl].map(v=>v.toString(16).padStart(2,'0')).join('');}
+  return '#'+[r,g,bl].map(v=>Math.min(255,Math.max(0,v)).toString(16).padStart(2,'0')).join('');}
 
 function drawBoss(){
   if(!boss) return;
