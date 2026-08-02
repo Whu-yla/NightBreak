@@ -108,67 +108,79 @@ const Audio = {
     const f = this.actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2000;
     s.connect(f); f.connect(g); g.connect(this.actx.destination); s.start(t);
   },
-  // ========== BGM 循环背景音乐 ==========
+  // ========== 激燃 BGM（电子战斗风格）==========
   bgmEnabled: true,
   bgmTimer: null,
   bgmBeat: 0,
-  // A小调旋律：低音线（贝斯）+ 琶音（主旋律）+ 鼓点
-  // 每拍0.4s，8拍一个小节，共4小节=32拍=12.8s循环
-  bgmBass:  [110,110, 165,110,  98,98, 147,98,  110,110, 165,110,  130,130, 196,130,
-             110,110, 165,110,  98,98, 147,98,  110,110, 165,110,  130,130, 196,130],
-  bgmArp:   [220,262,330,440,  196,247,294,392,  220,262,330,440,  262,330,392,523,
-             220,262,330,440,  196,247,294,392,  220,262,330,440,  262,330,392,523],
+  // BPM 140 → 每拍 0.214s，16拍循环 = 约3.4秒/loop
+  // D小调（Dorian），暗黑战斗风格
+  bgmBass:  [147,147,147,147,  131,131,131,131,  165,165,165,165,  110,110,110,110],
+  bgmLead:  [294,330,0,392,  349,294,0,262,  330,392,0,440,  294,262,0,220],
+  bgmChord: [147,0,0,0,  131,0,0,0,  165,0,0,0,  110,0,0,0],
   bgmStart() {
     if (!this.enabled || !this.actx || this.bgmTimer) return;
     this.bgmBeat = 0;
-    const beatDur = 0.4;
+    const B = 0.214; // 每拍秒数
     this.bgmTimer = setInterval(() => {
       if (!this.bgmEnabled || !this.actx) return;
       const t = this.actx.currentTime;
-      const i = this.bgmBeat % 32;
-      // 低音线（三角波，低音量）
-      const bassFreq = this.bgmBass[i];
-      if (bassFreq) {
+      const i = this.bgmBeat % 16;
+      // ===== 1. 贝斯（锯齿波，重低音）=====
+      const bf = this.bgmBass[i];
+      if (bf) {
         const o = this.actx.createOscillator(), g = this.actx.createGain();
-        o.type = 'triangle'; o.frequency.setValueAtTime(bassFreq, t);
-        g.gain.setValueAtTime(0.06, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + beatDur * 0.9);
+        o.type = 'sawtooth'; o.frequency.setValueAtTime(bf, t);
+        g.gain.setValueAtTime(0.12, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + B * 0.85);
+        const f = this.actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 300;
+        o.connect(f); f.connect(g); g.connect(this.actx.destination);
+        o.start(t); o.stop(t + B * 0.85);
+      }
+      // ===== 2. 主旋律（方波，8-bit风格）=====
+      const lf = this.bgmLead[i];
+      if (lf) {
+        const o = this.actx.createOscillator(), g = this.actx.createGain();
+        o.type = 'square'; o.frequency.setValueAtTime(lf, t);
+        g.gain.setValueAtTime(0.055, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + B * 0.6);
+        const f = this.actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2000;
+        o.connect(f); f.connect(g); g.connect(this.actx.destination);
+        o.start(t); o.stop(t + B * 0.6);
+      }
+      // ===== 3. 底鼓：每拍一个（重击）=====
+      {
+        const o = this.actx.createOscillator(), g = this.actx.createGain();
+        o.type = 'sine'; o.frequency.setValueAtTime(150, t);
+        o.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+        g.gain.setValueAtTime(0.25, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
         o.connect(g); g.connect(this.actx.destination);
-        o.start(t); o.stop(t + beatDur * 0.9);
+        o.start(t); o.stop(t + 0.12);
       }
-      // 琶音（正弦波，高八度）
-      const arpFreq = this.bgmArp[i];
-      if (arpFreq) {
-        const o2 = this.actx.createOscillator(), g2 = this.actx.createGain();
-        o2.type = 'sine'; o2.frequency.setValueAtTime(arpFreq, t);
-        g2.gain.setValueAtTime(0.035, t);
-        g2.gain.exponentialRampToValueAtTime(0.001, t + beatDur * 0.7);
-        o2.connect(g2); g2.connect(this.actx.destination);
-        o2.start(t); o2.stop(t + beatDur * 0.7);
-      }
-      // 鼓点：每4拍一个底鼓
-      if (i % 4 === 0) {
-        const o3 = this.actx.createOscillator(), g3 = this.actx.createGain();
-        o3.type = 'sine'; o3.frequency.setValueAtTime(60, t);
-        o3.frequency.exponentialRampToValueAtTime(30, t + 0.1);
-        g3.gain.setValueAtTime(0.08, t);
-        g3.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-        o3.connect(g3); g3.connect(this.actx.destination);
-        o3.start(t); o3.stop(t + 0.15);
-      }
-      // 镲片：每2拍一个高频噪声
+      // ===== 4. 军鼓：第2、4、6、8、10、12、14、16拍 ====
       if (i % 2 === 1) {
-        const buf = this.actx.createBuffer(1, Math.floor(this.actx.sampleRate * 0.05), this.actx.sampleRate);
+        const buf = this.actx.createBuffer(1, Math.floor(this.actx.sampleRate * 0.08), this.actx.sampleRate);
         const d = buf.getChannelData(0);
-        for (let j = 0; j < d.length; j++) d[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / d.length, 3);
+        for (let j = 0; j < d.length; j++) d[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / d.length, 2);
         const s = this.actx.createBufferSource(); s.buffer = buf;
-        const g4 = this.actx.createGain(); g4.gain.setValueAtTime(0.02, t);
-        g4.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-        const f = this.actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 4000;
-        s.connect(f); f.connect(g4); g4.connect(this.actx.destination); s.start(t);
+        const g = this.actx.createGain(); g.gain.setValueAtTime(0.15, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+        const f = this.actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1000;
+        s.connect(f); f.connect(g); g.connect(this.actx.destination); s.start(t);
+      }
+      // ===== 5. 镲片（开镲）：每4拍第3拍 ====
+      if (i % 4 === 2) {
+        const buf = this.actx.createBuffer(1, Math.floor(this.actx.sampleRate * 0.12), this.actx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let j = 0; j < d.length; j++) d[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / d.length, 4);
+        const s = this.actx.createBufferSource(); s.buffer = buf;
+        const g = this.actx.createGain(); g.gain.setValueAtTime(0.06, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+        const f = this.actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 5000;
+        s.connect(f); f.connect(g); g.connect(this.actx.destination); s.start(t);
       }
       this.bgmBeat++;
-    }, beatDur * 1000);
+    }, B * 1000);
   },
   bgmStop() { if (this.bgmTimer) { clearInterval(this.bgmTimer); this.bgmTimer = null; } },
   bgmToggle() { this.bgmEnabled = !this.bgmEnabled; if (!this.bgmEnabled) this.bgmStop(); else this.bgmStart(); return this.bgmEnabled; },
@@ -662,8 +674,8 @@ function getSkillButtons() {
 // 顶部按钮
 const TOP_R = 15;
 const topBtns = {
-  sound: { cx: W - TOP_R - 10 - SAFE_R, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
-  pause: { cx: W - TOP_R * 3 - 14 - SAFE_R, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
+  sound: { cx: TOP_R + 10 + SAFE_L, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
+  pause: { cx: TOP_R * 3 + 14 + SAFE_L, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
 };
 
 // 升级界面卡片
