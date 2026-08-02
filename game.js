@@ -533,6 +533,7 @@ let eventBannerTimer = 0; // 事件横幅显示时间
 let frenzyBuff = 0;       // 狂暴伤害加成剩余时间
 let shieldBuff = 0;       // 护盾剩余时间
 let doubleXpBuff = 0;     // 双倍经验剩余时间
+let magnetTimer = 0;      // 磁铁效果剩余时间（限时吸取全场经验宝石）
 function pickRandomEvent() {
   // 后期(>180s)才可能出现陨石轰炸等高危事件
   let pool = RANDOM_EVENTS;
