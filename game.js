@@ -5,25 +5,52 @@
 // ========== 画布与屏幕 ==========
 const canvas = wx.createCanvas();
 const ctx = canvas.getContext('2d');
-const sys = wx.getSystemInfoSync();
-const W = sys.screenWidth;
-const H = sys.screenHeight;
-const DPR = Math.min(sys.pixelRatio || 1, 2);
-canvas.width = W * DPR;
-canvas.height = H * DPR;
-ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+var _layoutInited = false; // 布局初始化完成标志（用 var 避免 TDZ，供 resizeScreen 首次执行时判断）
+let W = 0, H = 0, DPR = 1, IS_LANDSCAPE = true;
+// 安全区适配（避开刘海/圆角/Home指示条）
+let SAFE_L = 0, SAFE_T = 0, SAFE_R = 0, SAFE_B = 0;
+let BOTTOM_RESERVE = 110;
+// 横屏旋转下的 HUD 顶部偏移
+let HUD_TOP = 50;
+
+// 重新读取屏幕尺寸并同步 canvas 物理像素（响应横竖屏切换/首次进入）
+function resizeScreen() {
+  const sys = wx.getSystemInfoSync();
+  W = sys.screenWidth; H = sys.screenHeight;
+  DPR = Math.min(sys.pixelRatio || 1, 2);
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const _safe = sys.safeArea || { left: 0, top: 0, right: W, bottom: H };
+  SAFE_L = _safe.left || 0; SAFE_T = _safe.top || 0;
+  SAFE_R = W - (_safe.right || W); SAFE_B = H - (_safe.bottom || H);
+  IS_LANDSCAPE = W >= H;
+  BOTTOM_RESERVE = Math.max(110, H * 0.26);
+  // 胶囊按钮位置（避免 UI 重叠）
+  let _menuBtn = { bottom: 48 };
+  try { const r = wx.getMenuButtonBoundingClientRect(); if (r && r.bottom) _menuBtn = r; } catch (e) {}
+  HUD_TOP = _menuBtn.bottom + 6;
+  // 星层视差背景随屏幕尺寸重建（首次执行时 starLayers 尚未声明，跳过；由启动流程末尾的 buildStarLayers() 完成）
+  if (_layoutInited && typeof buildStarLayers === 'function') buildStarLayers();
+  // 摇杆/技能按钮等布局常量随屏幕尺寸重算（首次执行时 joystick 等尚未声明，跳过；由启动流程末尾的 recomputeLayout() 完成）
+  if (_layoutInited && typeof recomputeLayout === 'function') recomputeLayout();
+}
+resizeScreen();
 const TAU = Math.PI * 2;
 
-// 安全区适配（避开刘海/圆角/Home指示条）
-const _safe = sys.safeArea || { left: 0, top: 0, right: W, bottom: H };
-const SAFE_L = _safe.left || 0;
-const SAFE_T = _safe.top || 0;
-const SAFE_R = W - (_safe.right || W);
-const SAFE_B = H - (_safe.bottom || H);
-// 是否横屏
-const IS_LANDSCAPE = W >= H;
-// 底部 UI 预留（摇杆+技能按钮区域），横屏小屏减小
-const BOTTOM_RESERVE = Math.max(110, H * 0.26);
+// 响应横竖屏切换：延迟重算（避免旋转动画进行中读到中间态尺寸）
+let _resizeTimer = null;
+function onScreenResize() {
+  if (_resizeTimer) clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(resizeScreen, 120);
+}
+window.addEventListener('resize', onScreenResize);
+window.addEventListener('orientationchange', onScreenResize);
+// 首次进入：延迟再校准一次，解决"竖屏加载→横屏显示"的竞态导致分辨率错乱
+setTimeout(resizeScreen, 200);
+setTimeout(resizeScreen, 600);
 
 // ========== 大地图（面积约为屏幕 9 倍）==========
 // 无限地图：使用极大值代替固定边界，玩家可自由探索
@@ -32,10 +59,7 @@ const MAP_H = 100000;
 const MAP_ORIGIN_X = MAP_W / 2; // 玩家出生点
 const MAP_ORIGIN_Y = MAP_H / 2;
 
-// 获取胶囊按钮位置，避免 UI 重叠
-let _menuBtn = { bottom: 48 };
-try { const r = wx.getMenuButtonBoundingClientRect(); if (r && r.bottom) _menuBtn = r; } catch (e) {}
-const HUD_TOP = _menuBtn.bottom + 6;
+// HUD_TOP 已在 resizeScreen 中根据胶囊按钮位置计算（响应横竖屏切换）
 
 // ========== 工具函数 ==========
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -693,36 +717,50 @@ function updateRandomEvents(dt) {
 }
 
 // ========== 输入系统：固定虚拟摇杆 + 技能按钮 ==========
-// 固定摇杆位置（左下方，王者荣耀式），考虑 safeArea 避开刘海
-const JOY_CX = Math.max(70, W * 0.16) + SAFE_L;
-const JOY_CY = H - Math.max(80, H * 0.16) - SAFE_B;
-const JOY_R = Math.min(W * 0.11, 55);
-const JOY_KNOB_R = JOY_R * 0.52;
+// 布局常量：随屏幕尺寸重算（响应横竖屏切换）
+let JOY_CX, JOY_CY, JOY_R, JOY_KNOB_R;
 const JOY_DEAD = 0.15;
 const joystick = {
-  active: false, knobX: JOY_CX, knobY: JOY_CY,
+  active: false, knobX: 0, knobY: 0,
   vec: { x: 0, y: 0 }, touchId: null,
 };
+let SK_R, ULT_R, SK_GAP, SK_M = 16;
+let SK_RIGHT_X, SK_LEFT_X, SK_BOTTOM_Y, SK_TOP_Y;
+let SK_SLOTS = [];
+let ULT_SLOT = { cx: 0, cy: 0, r: 0 };
+const TOP_R = 15;
+let topBtns = { sound: { cx: 0, cy: 0, r: TOP_R }, pause: { cx: 0, cy: 0, r: TOP_R } };
+
+// 重新计算所有依赖屏幕尺寸的布局常量
+function recomputeLayout() {
+  JOY_CX = Math.max(70, W * 0.16) + SAFE_L;
+  JOY_CY = H - Math.max(80, H * 0.16) - SAFE_B;
+  JOY_R = Math.min(W * 0.11, 55);
+  JOY_KNOB_R = JOY_R * 0.52;
+  joystick.knobX = JOY_CX; joystick.knobY = JOY_CY;
+
+  SK_R = Math.min(W * 0.082, 32);
+  ULT_R = SK_R * 1.28;
+  SK_GAP = SK_R * 0.5;
+  SK_RIGHT_X = W - SK_R - SK_M - SAFE_R;
+  SK_LEFT_X = SK_RIGHT_X - SK_R * 2 - SK_GAP;
+  SK_BOTTOM_Y = H - SK_R - SK_M - 8 - SAFE_B;
+  SK_TOP_Y = SK_BOTTOM_Y - SK_R * 2 - SK_GAP;
+  SK_SLOTS = [
+    { cx: SK_LEFT_X, cy: SK_TOP_Y, r: SK_R },
+    { cx: SK_RIGHT_X, cy: SK_TOP_Y, r: SK_R },
+    { cx: SK_LEFT_X, cy: SK_BOTTOM_Y, r: SK_R },
+  ];
+  ULT_SLOT = { cx: W - ULT_R - SK_M - SAFE_R, cy: H - ULT_R - SK_M - 4 - SAFE_B, r: ULT_R };
+
+  topBtns = {
+    sound: { cx: TOP_R + 10 + SAFE_L, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
+    pause: { cx: TOP_R * 3 + 14 + SAFE_L, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
+  };
+}
+
 // 摇杆触控区：左半屏下半部分
 function isInJoyZone(x, y) { return x < W * 0.45 && y > H * 0.35; }
-
-// 技能按钮布局（右下方 2×2 网格），考虑 safeArea
-// 3个小技能槽（左上、右上、左下）+ 1终极技能槽（右下，更大），动态填充
-const SK_R = Math.min(W * 0.082, 32);
-const ULT_R = SK_R * 1.28; // 终极技能按钮更大，参考王者荣耀大招按钮
-const SK_GAP = SK_R * 0.5;
-const SK_M = 16;
-const SK_RIGHT_X = W - SK_R - SK_M - SAFE_R;
-const SK_LEFT_X = SK_RIGHT_X - SK_R * 2 - SK_GAP;
-const SK_BOTTOM_Y = H - SK_R - SK_M - 8 - SAFE_B;
-const SK_TOP_Y = SK_BOTTOM_Y - SK_R * 2 - SK_GAP;
-// 4个固定位置：3个小技能槽 + 1终极槽（终极偏右下且更大）
-const SK_SLOTS = [
-  { cx: SK_LEFT_X, cy: SK_TOP_Y, r: SK_R },    // 槽位1
-  { cx: SK_RIGHT_X, cy: SK_TOP_Y, r: SK_R },   // 槽位2
-  { cx: SK_LEFT_X, cy: SK_BOTTOM_Y, r: SK_R }, // 槽位3
-];
-const ULT_SLOT = { cx: W - ULT_R - SK_M - SAFE_R, cy: H - ULT_R - SK_M - 4 - SAFE_B, r: ULT_R };
 // 获取当前帧的技能按钮（动态：3个小技能 + 1终极）
 function getSkillButtons() {
   const btns = {};
@@ -740,12 +778,7 @@ function getSkillButtons() {
   return btns;
 }
 
-// 顶部按钮
-const TOP_R = 15;
-const topBtns = {
-  sound: { cx: TOP_R + 10 + SAFE_L, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
-  pause: { cx: TOP_R * 3 + 14 + SAFE_L, cy: HUD_TOP + TOP_R + 2, r: TOP_R },
-};
+// TOP_R / topBtns 已在上方 recomputeLayout 中声明并随屏幕尺寸重算
 
 // 升级界面卡片
 let levelUpChoices = [];
@@ -3352,6 +3385,8 @@ function loop(ts) {
 
 // ========== 启动 ==========
 buildStarLayers();
+recomputeLayout(); // 此时 joystick/SK_SLOTS 等已声明，计算布局常量
+_layoutInited = true; // 布局初始化完成，后续 resizeScreen 可安全重建星层与布局
 ensureLogin(); // 静默微信登录 + 生成/读取本地昵称，供结算自动上榜
 loadSprites(() => { /* 精灵图加载完成后会自动用于绘制 */ });
 

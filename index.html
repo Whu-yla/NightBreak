@@ -103,17 +103,11 @@
   }
 
   let DPR = Math.min(window.devicePixelRatio || 1, 2);
-  let W = window.innerWidth;
-  let H = window.innerHeight;
 
   function resizeCanvas() {
-    W = window.innerWidth;
-    H = window.innerHeight;
     DPR = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = W * DPR;
-    canvas.height = H * DPR;
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
+    // 注意：canvas 物理像素由 game.js 的 resizeScreen 负责，
+    // 这里仅更新 DPR 缓存，避免与 game.js 重复设置造成冲突
   }
   resizeCanvas();
 
@@ -125,22 +119,24 @@
       this._canvasCount++;
       if (this._canvasCount === 1) return canvas;
       const c = document.createElement('canvas');
-      c.width = W;
-      c.height = H;
+      c.width = window.innerWidth;
+      c.height = window.innerHeight;
       return c;
     },
+    // 每次调用都返回实时屏幕尺寸（响应横竖屏切换/首次进入竞态）
     getSystemInfoSync() {
+      const w = window.innerWidth, h = window.innerHeight;
       return {
-        screenWidth: W,
-        screenHeight: H,
-        pixelRatio: DPR,
-        safeArea: { left: 0, top: 0, right: W, bottom: H },
+        screenWidth: w,
+        screenHeight: h,
+        pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+        safeArea: { left: 0, top: 0, right: w, bottom: h },
         platform: 'web',
         language: navigator.language || 'zh_CN',
       };
     },
     getMenuButtonBoundingClientRect() {
-      return { bottom: 48, top: 4, left: W - 110, right: W - 10, width: 100, height: 32 };
+      return { bottom: 48, top: 4, left: window.innerWidth - 110, right: window.innerWidth - 10, width: 100, height: 32 };
     },
     createWebAudioContext() {
       try { return new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { return null; }
@@ -199,6 +195,6 @@
 
 })();
 </script>
-<script src="game.js"></script>
+<script src="game.js?v=20260802a"></script>
 </body>
 </html>
