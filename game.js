@@ -63,6 +63,7 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
 }
 function ptInRect(px, py, rx, ry, rw, rh) {
+  if (ry == null || rh == null || rw == null || rx == null) return false;
   return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh;
 }
 function ptInCircle(px, py, cx, cy, r) {
