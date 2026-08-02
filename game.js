@@ -14,6 +14,17 @@ canvas.height = H * DPR;
 ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 const TAU = Math.PI * 2;
 
+// 安全区适配（避开刘海/圆角/Home指示条）
+const _safe = sys.safeArea || { left: 0, top: 0, right: W, bottom: H };
+const SAFE_L = _safe.left || 0;
+const SAFE_T = _safe.top || 0;
+const SAFE_R = W - (_safe.right || W);
+const SAFE_B = H - (_safe.bottom || H);
+// 是否横屏
+const IS_LANDSCAPE = W >= H;
+// 底部 UI 预留（摇杆+技能按钮区域），横屏小屏减小
+const BOTTOM_RESERVE = Math.max(110, H * 0.26);
+
 // 获取胶囊按钮位置，避免 UI 重叠
 let _menuBtn = { bottom: 48 };
 try { const r = wx.getMenuButtonBoundingClientRect(); if (r && r.bottom) _menuBtn = r; } catch (e) {}
@@ -332,9 +343,9 @@ let time = 0, spawnTimer = 0, pickupTimer = 8, wave = 1, lastTime = 0;
 const upgradeLevels = {};
 
 // ========== 输入系统：固定虚拟摇杆 + 技能按钮 ==========
-// 固定摇杆位置（左下方，王者荣耀式）
-const JOY_CX = Math.max(70, W * 0.16);
-const JOY_CY = H - Math.max(80, H * 0.16);
+// 固定摇杆位置（左下方，王者荣耀式），考虑 safeArea 避开刘海
+const JOY_CX = Math.max(70, W * 0.16) + SAFE_L;
+const JOY_CY = H - Math.max(80, H * 0.16) - SAFE_B;
 const JOY_R = Math.min(W * 0.11, 55);
 const JOY_KNOB_R = JOY_R * 0.52;
 const JOY_DEAD = 0.15;
@@ -345,13 +356,13 @@ const joystick = {
 // 摇杆触控区：左半屏下半部分
 function isInJoyZone(x, y) { return x < W * 0.45 && y > H * 0.35; }
 
-// 技能按钮布局（右下方 2×2 网格）
+// 技能按钮布局（右下方 2×2 网格），考虑 safeArea
 const SK_R = Math.min(W * 0.085, 34);
 const SK_GAP = SK_R * 0.5;
 const SK_M = 16;
-const SK_RIGHT_X = W - SK_R - SK_M;
+const SK_RIGHT_X = W - SK_R - SK_M - SAFE_R;
 const SK_LEFT_X = SK_RIGHT_X - SK_R * 2 - SK_GAP;
-const SK_BOTTOM_Y = H - SK_R - SK_M - 8;
+const SK_BOTTOM_Y = H - SK_R - SK_M - 8 - SAFE_B;
 const SK_TOP_Y = SK_BOTTOM_Y - SK_R * 2 - SK_GAP;
 const skillBtns = {
   bullet: { cx: SK_LEFT_X, cy: SK_TOP_Y, r: SK_R, icon: '✦', name: '弹幕', key: '1' },
@@ -612,7 +623,7 @@ function drawEquipBar() {
   const slotSize = 38, gap = 6;
   const totalW = EQUIP_SLOTS.length * slotSize + (EQUIP_SLOTS.length - 1) * gap;
   const startX = 10;
-  const y = H - 220 < JOY_CY - JOY_R - 50 ? H - 220 : JOY_CY - JOY_R - 50;
+  const y = JOY_CY - JOY_R - slotSize - 12;
   for (let i = 0; i < EQUIP_SLOTS.length; i++) {
     const slot = EQUIP_SLOTS[i];
     const eq = equipment[slot];
@@ -777,44 +788,41 @@ function drawLevelUpScreen() {
   ctx.fillText('升 级', W / 2, H * 0.12);
   ctx.font = '12px sans-serif'; ctx.fillStyle = '#8a93a6';
   ctx.fillText('选择一项强化', W / 2, H * 0.12 + 24);
-  // 卡片
-  const cardW = W * 0.82, cardH = H * 0.20, gap = 12;
-  const startY = H * 0.20;
   for (let i = 0; i < levelUpChoices.length; i++) {
     const ch = levelUpChoices[i];
     const cr = levelUpCardRects[i];
-    const y = startY + i * (cardH + gap);
     const rc = RARITY[ch.rarity].color;
+    const cw = cr.w, ch_h = cr.h, cx = cr.x, cy = cr.y;
     // 卡片背景
-    const bgGrad = ctx.createLinearGradient(cr.x, y, cr.x + cardW, y + cardH);
+    const bgGrad = ctx.createLinearGradient(cx, cy, cx + cw, cy + ch_h);
     bgGrad.addColorStop(0, 'rgba(40,48,72,0.92)'); bgGrad.addColorStop(1, 'rgba(18,22,38,0.96)');
     ctx.fillStyle = bgGrad;
-    roundRect(ctx, cr.x, y, cardW, cardH, 14); ctx.fill();
+    roundRect(ctx, cx, cy, cw, ch_h, 14); ctx.fill();
     // 边框
     ctx.strokeStyle = rc; ctx.lineWidth = 1.5;
-    roundRect(ctx, cr.x, y, cardW, cardH, 14); ctx.stroke();
+    roundRect(ctx, cx, cy, cw, ch_h, 14); ctx.stroke();
     // 稀有度标签
     ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top';
     ctx.fillStyle = rc;
-    ctx.fillText(RARITY[ch.rarity].name, cr.x + cardW - 10, y + 8);
+    ctx.fillText(RARITY[ch.rarity].name, cx + cw - 10, cy + 8);
     // 图标
     ctx.font = '28px sans-serif'; ctx.textAlign = 'left';
     ctx.fillStyle = rc; ctx.shadowColor = rc; ctx.shadowBlur = 8;
-    ctx.fillText(ch.upgrade.icon, cr.x + 14, y + 16);
+    ctx.fillText(ch.upgrade.icon, cx + 14, cy + 16);
     ctx.shadowBlur = 0;
     // 名称
     ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = rc;
-    ctx.fillText(ch.upgrade.name, cr.x + 52, y + 14);
+    ctx.fillText(ch.upgrade.name, cx + 52, cy + 14);
     // 等级
     ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.5)';
     const lvlText = ch.upgrade.getLvl() > 0 ? 'Lv.' + ch.upgrade.getLvl() + ' → Lv.' + (ch.upgrade.getLvl() + ch.times) : '未拥有 · ×' + ch.times;
-    ctx.fillText(lvlText, cr.x + 52, y + 34);
+    ctx.fillText(lvlText, cx + 52, cy + 34);
     // 描述
     ctx.font = '12px sans-serif'; ctx.fillStyle = '#b8c0d0'; ctx.textAlign = 'left';
-    ctx.fillText(ch.upgrade.desc, cr.x + 14, y + cardH - 28);
+    ctx.fillText(ch.upgrade.desc, cx + 14, cy + ch_h - 28);
     if (ch.times > 1) {
       ctx.fillStyle = rc;
-      ctx.fillText('稀有度加成：效果 ×' + ch.times, cr.x + 14, y + cardH - 14);
+      ctx.fillText('稀有度加成：效果 ×' + ch.times, cx + 14, cy + ch_h - 14);
     }
   }
 }
@@ -1111,14 +1119,14 @@ const PICKUP_TYPES = [
   { kind: 'chest', icon: '◆', color: '#ffe27a', name: '宝箱', desc: '获得大量经验' },
 ];
 function spawnPickup() { const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
-  pickups.push({ ...t, x: rand(60, W - 60), y: rand(100, H - 240), r: 14, life: 18, pulse: 0 }); }
+  pickups.push({ ...t, x: rand(60, W - 60), y: rand(100, H - BOTTOM_RESERVE - 40), r: 14, life: 18, pulse: 0 }); }
 function spawnPickupAt(x, y) {
   if (Math.random() < 0.18) {
     const slot = EQUIP_SLOTS[randi(0, 3)]; const rarity = pickRarity(); const eq = rollEquipment(slot, rarity);
-    eqDrops.push({ ...eq, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - 220), r: 14, life: 40, pulse: 0 }); return;
+    eqDrops.push({ ...eq, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - BOTTOM_RESERVE - 40), r: 14, life: 40, pulse: 0 }); return;
   }
   const t = PICKUP_TYPES[randi(0, PICKUP_TYPES.length - 1)];
-  pickups.push({ ...t, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - 220), r: 14, life: 15, pulse: 0 });
+  pickups.push({ ...t, x: clamp(x, 30, W - 30), y: clamp(y, 60, H - BOTTOM_RESERVE - 40), r: 14, life: 15, pulse: 0 });
 }
 
 // ========== 升级池 ==========
@@ -1151,12 +1159,20 @@ function showLevelUp() {
   const pool = availableUpgrades(); const choices = []; const tmp = pool.slice();
   for (let i = 0; i < 3 && tmp.length; i++) { const idx = randi(0, tmp.length - 1); choices.push(tmp.splice(idx, 1)[0]); }
   levelUpChoices = []; levelUpCardRects = [];
-  const cardW = W * 0.82;
-  const cardX = (W - cardW) / 2;
-  for (const u of choices) {
+  // 横屏：3张卡片横排；竖屏：纵排
+  const n = choices.length;
+  const gap = 12;
+  const cardW = IS_LANDSCAPE ? Math.min(W * 0.28, 260) : W * 0.82;
+  const cardH = IS_LANDSCAPE ? Math.min(H * 0.56, 260) : H * 0.20;
+  const totalW = n * cardW + (n - 1) * gap;
+  const startX = (W - totalW) / 2;
+  const startY = IS_LANDSCAPE ? H * 0.24 : H * 0.20;
+  for (let i = 0; i < choices.length; i++) {
+    const u = choices[i];
     const rarity = pickRarity(); const rm = RARITY[rarity].mult; const times = rm >= 3.5 ? 3 : rm >= 2.2 ? 2 : 1;
+    const cx = startX + i * (cardW + gap);
     levelUpChoices.push({ upgrade: u, rarity, times });
-    levelUpCardRects.push({ x: cardX, w: cardW, upgrade: u, rarity, times });
+    levelUpCardRects.push({ x: cx, y: startY, w: cardW, h: cardH, upgrade: u, rarity, times });
   }
 }
 
@@ -1180,7 +1196,7 @@ function update(dt) {
     player.facing += d * Math.min(1, dt * 10);
   }
   player.x = clamp(player.x, player.r, W - player.r);
-  player.y = clamp(player.y, player.r, H - player.r - 180);
+  player.y = clamp(player.y, player.r, H - player.r - BOTTOM_RESERVE);
   if (player.invuln > 0) player.invuln -= dt;
   if (player.regen > 0 && player.hp < player.maxHp) player.hp = Math.min(player.maxHp, player.hp + player.regen * dt);
 
